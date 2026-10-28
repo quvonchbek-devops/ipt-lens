@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -15,10 +17,14 @@ import (
 )
 
 type Server struct {
-	Demo   bool
-	Token  string
-	Watch  *iptables.Watchdog
-	Static http.Handler
+	Demo    bool
+	Token   string
+	Version string
+	// AllowedHosts are the host names (without port) accepted in the Host
+	// header. It defends against DNS rebinding. Empty disables the check.
+	AllowedHosts []string
+	Watch        *iptables.Watchdog
+	Static       http.Handler
 }
 
 func (s *Server) Routes() http.Handler {
@@ -30,27 +36,93 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/api/v1/rules/delete", s.guard(http.MethodPost, s.handleRuleDelete))
 	mux.Handle("/api/v1/rules/edit", s.guard(http.MethodPost, s.handleRuleEdit))
 	mux.Handle("/", s.Static)
-	return securityHeaders(mux)
+
+	root := http.NewServeMux()
+	root.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte("ok\n"))
+	})
+	root.Handle("/", s.checkHost(mux))
+	return securityHeaders(root)
 }
 
-// guard - metod tekshiruvi va Bearer token tekshiruvi (constant-time).
+// checkHost rejects requests whose Host header is not an allowed name, so a
+// hostile page cannot reach the API through a rebound DNS name.
+func (s *Server) checkHost(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(s.AllowedHosts) > 0 && !s.hostAllowed(r.Host) {
+			writeJSON(w, http.StatusMisdirectedRequest, errBody("host not allowed: "+r.Host))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) hostAllowed(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	for _, a := range s.AllowedHosts {
+		if strings.EqualFold(host, a) {
+			return true
+		}
+	}
+	return false
+}
+
+// guard enforces the method, rejects cross-site requests, requires a JSON
+// body type on POST and checks the bearer token in constant time.
 func (s *Server) guard(method string, h http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != method {
 			w.Header().Set("Allow", method)
-			writeJSON(w, http.StatusMethodNotAllowed, errBody("metod ruxsat etilmagan"))
+			writeJSON(w, http.StatusMethodNotAllowed, errBody("method not allowed"))
+			return
+		}
+		if !sameOrigin(r) {
+			writeJSON(w, http.StatusForbidden, errBody("cross-site request rejected"))
+			return
+		}
+		if method == http.MethodPost && !isJSON(r) {
+			writeJSON(w, http.StatusUnsupportedMediaType, errBody("Content-Type must be application/json"))
 			return
 		}
 		if s.Token != "" {
 			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 			if subtle.ConstantTimeCompare([]byte(got), []byte(s.Token)) != 1 {
-				writeJSON(w, http.StatusUnauthorized, errBody("token noto'g'ri yoki yo'q"))
+				writeJSON(w, http.StatusUnauthorized, errBody("missing or invalid token"))
 				return
 			}
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		h(w, r)
 	})
+}
+
+// sameOrigin reports whether the request comes from the UI's own origin (or
+// from a non-browser client). "same-site" is rejected too: another port on
+// the same host is same-site but a different application.
+func sameOrigin(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "", "same-origin", "none":
+	default:
+		return false
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	return err == nil && strings.EqualFold(u.Host, r.Host)
+}
+
+// isJSON requires application/json. Browsers send it cross-origin only after
+// a CORS preflight, which this server never approves.
+func isJSON(r *http.Request) bool {
+	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return err == nil && mt == "application/json"
 }
 
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +137,8 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	pending, rem := s.Watch.Status()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"state":            st,
+		"version":          s.Version,
+		"persistent":       s.Watch.Persistent(),
 		"watchdog_pending": pending,
 		"watchdog_rem_sec": rem,
 	})
@@ -111,13 +185,15 @@ func (s *Server) handleConfirm(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "confirmed"})
 }
 
+type ruleRef struct {
+	Table  string `json:"table"`
+	Chain  string `json:"chain"`
+	RuleID int    `json:"rule_id"`
+	Expect string `json:"expect"`
+}
+
 func (s *Server) handleRuleDelete(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Table  string `json:"table"`
-		Chain  string `json:"chain"`
-		RuleID int    `json:"rule_id"`
-		Expect string `json:"expect"`
-	}
+	var req ruleRef
 	if !decode(w, r, &req) {
 		return
 	}
@@ -130,11 +206,8 @@ func (s *Server) handleRuleDelete(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRuleEdit(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Table  string `json:"table"`
-		Chain  string `json:"chain"`
-		RuleID int    `json:"rule_id"`
-		Expect string `json:"expect"`
-		Rule   string `json:"rule"`
+		ruleRef
+		Rule string `json:"rule"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -149,19 +222,19 @@ func (s *Server) handleRuleEdit(w http.ResponseWriter, r *http.Request) {
 func validateSim(q iptables.SimRequest) error {
 	for _, ip := range []string{q.SrcIP, q.DstIP} {
 		if ip != "" && net.ParseIP(ip) == nil {
-			return fmt.Errorf("%w: IP noto'g'ri: %s", iptables.ErrInvalid, ip)
+			return fmt.Errorf("%w: invalid IP: %s", iptables.ErrInvalid, ip)
 		}
 	}
 	if q.DstPort != "" {
 		n, err := strconv.Atoi(q.DstPort)
 		if err != nil || n < 1 || n > 65535 {
-			return fmt.Errorf("%w: port noto'g'ri: %s", iptables.ErrInvalid, q.DstPort)
+			return fmt.Errorf("%w: invalid port: %s", iptables.ErrInvalid, q.DstPort)
 		}
 	}
 	switch strings.ToLower(q.Proto) {
 	case "", "tcp", "udp", "icmp", "all":
 	default:
-		return fmt.Errorf("%w: protokol noto'g'ri: %s", iptables.ErrInvalid, q.Proto)
+		return fmt.Errorf("%w: invalid protocol: %s", iptables.ErrInvalid, q.Proto)
 	}
 	return nil
 }
@@ -171,7 +244,7 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
-		writeJSON(w, http.StatusBadRequest, errBody("JSON noto'g'ri: "+err.Error()))
+		writeJSON(w, http.StatusBadRequest, errBody("invalid JSON: "+err.Error()))
 		return false
 	}
 	return true
@@ -182,14 +255,10 @@ func writeErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, iptables.ErrInvalid):
 		code = http.StatusBadRequest
-	case errors.Is(err, iptables.ErrDemo):
+	case errors.Is(err, iptables.ErrDemo), errors.Is(err, iptables.ErrProtected):
 		code = http.StatusForbidden
-	case errors.Is(err, iptables.ErrProtected):
-		code = http.StatusForbidden
-	case errors.Is(err, iptables.ErrStale):
-		code = http.StatusConflict
-	case errors.Is(err, iptables.ErrPending), errors.Is(err, iptables.ErrDuplicate),
-		errors.Is(err, iptables.ErrNoPending):
+	case errors.Is(err, iptables.ErrStale), errors.Is(err, iptables.ErrPending),
+		errors.Is(err, iptables.ErrDuplicate), errors.Is(err, iptables.ErrNoPending):
 		code = http.StatusConflict
 	}
 	writeJSON(w, code, errBody(err.Error()))

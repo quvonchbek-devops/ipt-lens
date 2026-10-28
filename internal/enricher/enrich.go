@@ -13,8 +13,8 @@ import (
 	"github.com/quvonchbek-devops/ipt-lens/internal/iptables"
 )
 
-// Enrich - interfeys IP'lari, lokal manzillar va Docker konteyner nomlarini qo'shadi.
-// Hech qanday hardcoded ma'lumot yo'q: hamma nom real tizimdan olinadi.
+// Enrich adds interface addresses, the host's local addresses and Docker
+// container names. Nothing is hard-coded: every name comes from the live system.
 func Enrich(st *iptables.SystemState) {
 	if st.EnrichMap == nil {
 		st.EnrichMap = make(map[string]iptables.MetaInfo)
