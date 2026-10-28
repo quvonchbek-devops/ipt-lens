@@ -57,9 +57,14 @@ non-terminating targets.
 
 Matching covers protocol, interfaces, addresses, destination ports (lists and
 ranges), conntrack state and `addrtype LOCAL`, with negation. An empty request
-field matches anything. The parser records any other match option before `-j` in
-`Rule.Unsupported`; such rules are assumed to match and the result is marked
-`uncertain` with one warning per rule.
+field matches anything. `matches` returns the conditions it could not check:
+source ports, other address types, and any option the parser did not map to a
+field (`Rule.Unsupported`). Such rules are assumed to match and the result is
+marked `uncertain` with one warning per rule.
+
+The parser also sets `protected` on chains and rules owned by Docker,
+Kubernetes, Calico, libvirt or ufw; the server refuses to change them and the UI
+shows them locked.
 
 ## Frontend
 

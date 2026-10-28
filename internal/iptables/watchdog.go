@@ -7,7 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -88,9 +88,6 @@ func NewWatchdog(dir string, demo bool, timeout time.Duration, opts ...Option) (
 	return w, nil
 }
 
-// Persistent reports whether confirmed changes are written to a rules file.
-func (w *Watchdog) Persistent() bool { return w.persistFile != "" }
-
 func (w *Watchdog) pendingPath() string { return filepath.Join(w.dir, "pending.json") }
 
 func runUndo(cmds [][]string) error {
@@ -165,7 +162,7 @@ func (w *Watchdog) backup() error {
 		return fmt.Errorf("cannot take a backup, nothing was changed: %w", err)
 	}
 	path := filepath.Join(w.dir, fmt.Sprintf("backup-%d.rules", time.Now().UnixNano()))
-	if err := os.WriteFile(path, save, 0o600); err != nil {
+	if err := writeFileAtomic(path, save, 0o600); err != nil {
 		return fmt.Errorf("cannot write backup: %w", err)
 	}
 	w.pruneBackups()
@@ -178,7 +175,7 @@ func (w *Watchdog) pruneBackups() {
 		return
 	}
 	// Names embed a nanosecond timestamp of equal width, so lexical order is age order.
-	sort.Strings(files)
+	slices.Sort(files)
 	for _, f := range files[:len(files)-w.keepBackups] {
 		if err := os.Remove(f); err != nil {
 			log.Printf("cannot remove old backup %s: %v", f, err)
@@ -230,25 +227,26 @@ func (w *Watchdog) expire(c *change) {
 	_ = os.Remove(w.pendingPath())
 }
 
-// Confirm keeps the pending change. When a persist file is configured, the
-// full ruleset is written to it; a write failure is returned, but the change
-// stays confirmed in the running firewall.
-func (w *Watchdog) Confirm() error {
+// Confirm keeps the pending change and reports whether the ruleset was saved
+// to the persist file. A save failure is returned, but the change stays
+// confirmed in the running firewall. The lock is held while saving so that no
+// new unconfirmed change can end up in the saved ruleset.
+func (w *Watchdog) Confirm() (persisted bool, err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.pending == nil {
-		return ErrNoPending
+		return false, ErrNoPending
 	}
 	w.pending.timer.Stop()
 	w.pending = nil
 	_ = os.Remove(w.pendingPath())
 	if w.persistFile == "" {
-		return nil
+		return false, nil
 	}
 	if err := w.persist(); err != nil {
-		return fmt.Errorf("change confirmed, but saving it to %s failed: %w", w.persistFile, err)
+		return false, fmt.Errorf("change confirmed, but saving it to %s failed: %w", w.persistFile, err)
 	}
-	return nil
+	return true, nil
 }
 
 func (w *Watchdog) persist() error {
@@ -289,19 +287,17 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
+	_, err = tmp.Write(data)
+	if err == nil {
+		err = tmp.Chmod(perm)
 	}
-	if err := tmp.Chmod(perm); err != nil {
-		tmp.Close()
-		return err
+	if err == nil {
+		err = tmp.Sync()
 	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
 	}
-	if err := tmp.Close(); err != nil {
+	if err != nil {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)

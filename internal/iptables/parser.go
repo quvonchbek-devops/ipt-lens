@@ -122,7 +122,21 @@ func ParseIptablesSave(r io.Reader) (*SystemState, error) {
 			chain.Rules = append(chain.Rules, rule)
 		}
 	}
+	markProtected(state)
 	return state, scanner.Err()
+}
+
+// markProtected flags chains and rules owned by Docker, Kubernetes, Calico,
+// libvirt or ufw, so every client gets the same answer as the server's checks.
+func markProtected(st *SystemState) {
+	for _, t := range st.Tables {
+		for name, c := range t.Chains {
+			c.Protected = protectedName(name)
+			for _, r := range c.Rules {
+				r.Protected = isProtected(name, r)
+			}
+		}
+	}
 }
 
 func parseChainHeader(line string) (*Chain, error) {

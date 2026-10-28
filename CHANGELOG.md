@@ -18,11 +18,16 @@ First public release.
 - `--allowed-hosts` for running behind a reverse proxy.
 - `--version` flag. The version is shown in the UI and returned by `/api/v1/state`.
 - `GET /healthz` for liveness checks.
-- The simulator marks a result as approximate, with a warning per rule, when a
-  matching rule uses options it cannot evaluate (ipset, limit, iprange, ...).
+- The simulator marks a result as approximate, with one warning per rule, when a
+  matching rule uses conditions it cannot evaluate (ipset, limit, iprange,
+  source ports, address types other than LOCAL, ...).
+- `/api/v1/state` marks chains and rules as `protected`, so clients no longer
+  keep their own copy of the managed-chain list.
+- `/api/v1/confirm` returns `persisted`, telling whether the ruleset was saved.
 - Tests for the watchdog, the HTTP API and flag handling.
 - CI (gofmt, vet, race tests, staticcheck), GoReleaser releases for linux
-  amd64/arm64, a hardened systemd unit and an env example.
+  amd64/arm64, a hardened systemd unit and an env example. Workflow actions
+  are pinned to commit SHAs and kept current by Dependabot.
 - README, contributing guide, security policy, code of conduct, roadmap and
   architecture notes.
 
@@ -31,6 +36,8 @@ First public release.
 - All UI text, API errors, logs and code comments are in English.
 - Module path is `github.com/quvonchbek-devops/ipt-lens`.
 - Undo commands run in reverse order of the applied steps.
+- Backups, the pending record and the persisted ruleset are all written
+  atomically.
 
 ### Fixed
 

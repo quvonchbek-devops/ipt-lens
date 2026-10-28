@@ -15,12 +15,13 @@ type Table struct {
 }
 
 type Chain struct {
-	Name     string  `json:"name"`
-	Policy   string  `json:"policy"`
-	Packets  uint64  `json:"packets"`
-	Bytes    uint64  `json:"bytes"`
-	IsCustom bool    `json:"is_custom"`
-	Rules    []*Rule `json:"rules"`
+	Name      string  `json:"name"`
+	Policy    string  `json:"policy"`
+	Packets   uint64  `json:"packets"`
+	Bytes     uint64  `json:"bytes"`
+	IsCustom  bool    `json:"is_custom"`
+	Protected bool    `json:"protected"`
+	Rules     []*Rule `json:"rules"`
 }
 
 type Rule struct {
@@ -42,6 +43,7 @@ type Rule struct {
 	Extra       string   `json:"extra"`
 	RawRule     string   `json:"raw_rule"`
 	Unsupported []string `json:"unsupported,omitempty"`
+	Protected   bool     `json:"protected"`
 }
 
 type MetaInfo struct {

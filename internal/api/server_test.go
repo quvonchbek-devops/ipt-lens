@@ -122,13 +122,12 @@ func TestStateDemo(t *testing.T) {
 		State struct {
 			IsMock bool `json:"is_mock"`
 		} `json:"state"`
-		Version    string `json:"version"`
-		Persistent *bool  `json:"persistent"`
+		Version string `json:"version"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if !resp.State.IsMock || resp.Version != "1.2.3" || resp.Persistent == nil {
+	if !resp.State.IsMock || resp.Version != "1.2.3" {
 		t.Fatalf("unexpected state response: %s", rec.Body)
 	}
 	if got := rec.Header().Get("Cache-Control"); got != "no-store" {

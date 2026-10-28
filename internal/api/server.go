@@ -59,11 +59,7 @@ func (s *Server) checkHost(next http.Handler) http.Handler {
 }
 
 func (s *Server) hostAllowed(hostport string) bool {
-	host := hostport
-	if h, _, err := net.SplitHostPort(hostport); err == nil {
-		host = h
-	}
-	host = strings.Trim(host, "[]")
+	host := (&url.URL{Host: hostport}).Hostname()
 	for _, a := range s.AllowedHosts {
 		if strings.EqualFold(host, a) {
 			return true
@@ -138,7 +134,6 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"state":            st,
 		"version":          s.Version,
-		"persistent":       s.Watch.Persistent(),
 		"watchdog_pending": pending,
 		"watchdog_rem_sec": rem,
 	})
@@ -178,11 +173,12 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConfirm(w http.ResponseWriter, r *http.Request) {
-	if err := s.Watch.Confirm(); err != nil {
+	persisted, err := s.Watch.Confirm()
+	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "confirmed"})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "confirmed", "persisted": persisted})
 }
 
 type ruleRef struct {

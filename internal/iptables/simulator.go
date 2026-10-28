@@ -22,6 +22,7 @@ type simCtx struct {
 	ctState  string
 	steps    []SimStep
 	warnings []string
+	warned   map[*Rule]bool
 }
 
 // SimulatePacket walks a packet through the netfilter hooks in kernel order:
@@ -34,15 +35,17 @@ type simCtx struct {
 // are assumed to match; the result is then marked Uncertain with a warning.
 func SimulatePacket(state *SystemState, req SimRequest) SimResult {
 	s := &simCtx{
-		state:   state,
-		src:     req.SrcIP,
-		dst:     req.DstIP,
-		dstPort: req.DstPort,
-		proto:   strings.ToLower(req.Proto),
-		inIf:    req.InIface,
-		outIf:   req.OutIface,
-		ctState: strings.ToUpper(req.CtState),
-		steps:   []SimStep{},
+		state:    state,
+		src:      req.SrcIP,
+		dst:      req.DstIP,
+		dstPort:  req.DstPort,
+		proto:    strings.ToLower(req.Proto),
+		inIf:     req.InIface,
+		outIf:    req.OutIface,
+		ctState:  strings.ToUpper(req.CtState),
+		steps:    []SimStep{},
+		warnings: []string{},
+		warned:   map[*Rule]bool{},
 	}
 	if s.ctState == "" {
 		s.ctState = "NEW"
@@ -70,12 +73,8 @@ func SimulatePacket(state *SystemState, req SimRequest) SimResult {
 	if s.dstPort != "" {
 		finalDst += ":" + s.dstPort
 	}
-	warnings := s.warnings
-	if warnings == nil {
-		warnings = []string{}
-	}
 	return SimResult{FinalVerdict: verdict, FinalDst: finalDst, Steps: s.steps,
-		Uncertain: len(warnings) > 0, Warnings: warnings}
+		Uncertain: len(s.warnings) > 0, Warnings: s.warnings}
 }
 
 func isBlocking(v string) bool { return v == "DROP" || v == "REJECT" }
@@ -110,14 +109,20 @@ func (s *simCtx) evalChain(tbl *Table, ch *Chain, depth int) string {
 
 rules:
 	for _, r := range ch.Rules {
-		if !s.matches(r) {
+		ok, unchecked := s.matches(r)
+		if !ok {
 			continue
 		}
 		step := SimStep{Table: tbl.Name, Chain: ch.Name, RuleID: r.ID, RawRule: r.RawRule, Note: r.Comment}
-		if len(r.Unsupported) > 0 {
-			s.warnings = append(s.warnings, fmt.Sprintf("%s/%s #%d uses %s, which the simulator cannot evaluate; it was assumed to match",
-				tbl.Name, ch.Name, r.ID, strings.Join(r.Unsupported, " ")))
-			step.Note = joinNote(step.Note, "assumed to match: "+strings.Join(r.Unsupported, " "))
+		if len(unchecked) > 0 {
+			conds := strings.Join(unchecked, " ")
+			step.Note = joinNote(step.Note, "assumed to match: "+conds)
+			if !s.warned[r] {
+				s.warned[r] = true
+				s.warnings = append(s.warnings, fmt.Sprintf(
+					"%s/%s #%d uses %s, which the simulator cannot evaluate; it was assumed to match",
+					tbl.Name, ch.Name, r.ID, conds))
+			}
 		}
 
 		switch r.Target {
@@ -199,39 +204,41 @@ func (s *simCtx) applyDNAT(r *Rule) string {
 	return fmt.Sprintf("Destination rewritten: %s → %s", before, after)
 }
 
-func (s *simCtx) matches(r *Rule) bool {
+// matches reports whether the packet matches r. Conditions the simulator
+// cannot evaluate are assumed to match and returned in unchecked, so the
+// caller can flag the result as approximate.
+func (s *simCtx) matches(r *Rule) (ok bool, unchecked []string) {
 	if r.Proto != "" && r.Proto != "all" && s.proto != "" && !matchField(r.Proto, s.proto) {
-		return false
+		return false, nil
 	}
 	if !matchIface(r.InIface, s.inIf) || !matchIface(r.OutIface, s.outIf) {
-		return false
+		return false, nil
 	}
 	if r.DstPort != "" && s.dstPort != "" && !matchPort(r.DstPort, s.dstPort) {
-		return false
+		return false, nil
 	}
 	if r.Source != "" && s.src != "" && !matchCIDR(r.Source, s.src) {
-		return false
+		return false, nil
 	}
 	if r.Destination != "" && s.dst != "" && !matchCIDR(r.Destination, s.dst) {
-		return false
+		return false, nil
 	}
 	if r.CtState != "" && !matchCtState(r.CtState, s.ctState) {
-		return false
+		return false, nil
 	}
-	if r.DstType != "" && !s.matchDstType(r.DstType) {
-		return false
+	if r.DstType != "" {
+		if strings.TrimPrefix(r.DstType, "!") == "LOCAL" {
+			if s.isLocal(s.dst) == strings.HasPrefix(r.DstType, "!") {
+				return false, nil
+			}
+		} else {
+			unchecked = append(unchecked, "--dst-type "+r.DstType)
+		}
 	}
-	return true
-}
-
-func (s *simCtx) matchDstType(rule string) bool {
-	neg := strings.HasPrefix(rule, "!")
-	clean := strings.TrimPrefix(rule, "!")
-	if clean == "LOCAL" {
-		return s.isLocal(s.dst) != neg
+	if r.SrcPort != "" {
+		unchecked = append(unchecked, "--sport "+r.SrcPort) // the request carries no source port
 	}
-	// Other types (UNICAST, BROADCAST, ...) are not simulated and assumed to match.
-	return true
+	return true, append(unchecked, r.Unsupported...)
 }
 
 func (s *simCtx) isLocal(ip string) bool {

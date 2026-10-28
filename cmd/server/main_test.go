@@ -28,6 +28,14 @@ func TestHostAllowlist(t *testing.T) {
 	}
 }
 
+func TestDisplayVersion(t *testing.T) {
+	for in, want := range map[string]string{"0.1.0": "v0.1.0", "v0.1.0": "v0.1.0", "dev": "dev", "": ""} {
+		if got := displayVersion(in); got != want {
+			t.Errorf("displayVersion(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestIsLoopback(t *testing.T) {
 	for addr, want := range map[string]bool{
 		"127.0.0.1:8090": true, "localhost:8090": true, "[::1]:8090": true,

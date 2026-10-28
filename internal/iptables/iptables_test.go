@@ -130,3 +130,36 @@ func TestTokenizeEscapedQuotes(t *testing.T) {
 		t.Fatalf("tokens = %q, want %q", toks, want)
 	}
 }
+
+func TestSimulateFlagsUncheckedKnownFields(t *testing.T) {
+	st := mustParse(t, "*filter\n:INPUT ACCEPT [0:0]\n"+
+		"-A INPUT -p tcp -m tcp --sport 1024:65535 -j DROP\n"+
+		"-A INPUT -m addrtype --dst-type BROADCAST -j DROP\nCOMMIT\n")
+	res := SimulatePacket(st, SimRequest{SrcIP: "1.2.3.4", DstIP: "127.0.0.1", Proto: "tcp", DstPort: "22"})
+	if !res.Uncertain || len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "--sport") {
+		t.Fatalf("source port match not flagged: %q", res.Warnings)
+	}
+}
+
+func TestSimulateWarnsOncePerRule(t *testing.T) {
+	st := mustParse(t, "*filter\n:INPUT ACCEPT [0:0]\n:FORWARD ACCEPT [0:0]\n:CHK - [0:0]\n"+
+		"-A INPUT -j CHK\n-A INPUT -j CHK\n-A CHK -m limit --limit 1/s -j LOG\nCOMMIT\n")
+	res := SimulatePacket(st, SimRequest{DstIP: "127.0.0.1"})
+	if len(res.Warnings) != 1 {
+		t.Fatalf("want one warning for one rule, got %q", res.Warnings)
+	}
+}
+
+func TestProtectedMarkedByParser(t *testing.T) {
+	st := mustParse(t, MockIptablesData)
+	f := st.Tables["filter"]
+	if !f.Chains["DOCKER"].Protected || f.Chains["INPUT"].Protected {
+		t.Fatal("chain protection flags wrong")
+	}
+	if !f.Chains["FORWARD"].Rules[1].Protected { // -j DOCKER-ISOLATION-STAGE-1
+		t.Fatal("rule jumping to a managed chain not protected")
+	}
+	if f.Chains["INPUT"].Rules[0].Protected {
+		t.Fatal("ordinary rule marked protected")
+	}
+}

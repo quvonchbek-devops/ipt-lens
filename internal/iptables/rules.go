@@ -88,7 +88,7 @@ func findRule(table, chain string, num int, expect string) (*Rule, error) {
 	if stripCounters(r.RawRule) != stripCounters(expect) {
 		return nil, ErrStale
 	}
-	if isProtected(chain, r) {
+	if r.Protected {
 		return nil, ErrProtected
 	}
 	return r, nil

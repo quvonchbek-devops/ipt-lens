@@ -150,8 +150,12 @@ func TestConfirmClearsPending(t *testing.T) {
 	if err := w.begin(twoStepPlan); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Confirm(); err != nil {
+	persisted, err := w.Confirm()
+	if err != nil {
 		t.Fatal(err)
+	}
+	if persisted {
+		t.Fatal("persisted = true without a persist file")
 	}
 	if pending, _ := w.Status(); pending {
 		t.Fatal("still pending after confirm")
@@ -159,7 +163,7 @@ func TestConfirmClearsPending(t *testing.T) {
 	if _, err := os.Stat(w.pendingPath()); !os.IsNotExist(err) {
 		t.Fatal("pending.json not removed after confirm")
 	}
-	if err := w.Confirm(); !errors.Is(err, ErrNoPending) {
+	if _, err := w.Confirm(); !errors.Is(err, ErrNoPending) {
 		t.Fatalf("second confirm: got %v, want ErrNoPending", err)
 	}
 }
@@ -189,7 +193,7 @@ func TestBackupsRotated(t *testing.T) {
 		if err := w.begin(twoStepPlan); err != nil {
 			t.Fatal(err)
 		}
-		if err := w.Confirm(); err != nil {
+		if _, err := w.Confirm(); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -204,14 +208,11 @@ func TestConfirmPersists(t *testing.T) {
 	f.save = "*filter\n:INPUT DROP [0:0]\n-A INPUT -j ACCEPT\nCOMMIT\n"
 	target := filepath.Join(t.TempDir(), "rules.v4")
 	w := newTestWatchdog(t, time.Hour, WithPersistFile(target))
-	if !w.Persistent() {
-		t.Fatal("Persistent() = false with a persist file set")
-	}
 	if err := w.begin(twoStepPlan); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Confirm(); err != nil {
-		t.Fatal(err)
+	if persisted, err := w.Confirm(); err != nil || !persisted {
+		t.Fatalf("Confirm() = %v, %v; want true, nil", persisted, err)
 	}
 	data, err := os.ReadFile(target)
 	if err != nil {
@@ -232,7 +233,7 @@ func TestConfirmPersistFailureReported(t *testing.T) {
 	if err := w.begin(twoStepPlan); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Confirm(); err == nil {
+	if persisted, err := w.Confirm(); err == nil || persisted {
 		t.Fatal("expected a persistence error")
 	}
 	if pending, _ := w.Status(); pending {

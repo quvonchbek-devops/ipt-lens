@@ -129,7 +129,7 @@ All endpoints are under `/api/v1`, take and return JSON, and need
 | POST | `/apply` | `table, chain, position, rule` | Add a rule (`position` 0 appends) |
 | POST | `/rules/edit` | `table, chain, rule_id, expect, rule` | Replace a rule |
 | POST | `/rules/delete` | `table, chain, rule_id, expect` | Delete a rule |
-| POST | `/confirm` | | Keep the pending change |
+| POST | `/confirm` | | Keep the pending change; returns `persisted` |
 
 `GET /healthz` returns `ok` without authentication.
 

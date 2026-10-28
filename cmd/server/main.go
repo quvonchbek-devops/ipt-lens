@@ -62,7 +62,7 @@ func main() {
 	srv := &api.Server{
 		Demo:         *demo,
 		Token:        token,
-		Version:      version,
+		Version:      displayVersion(version),
 		AllowedHosts: hosts,
 		Watch:        watch,
 		Static:       http.FileServer(http.FS(static)),
@@ -89,10 +89,7 @@ func main() {
 // on all addresses with no extras, since the reachable names are unknown;
 // a token is mandatory in that case.
 func hostAllowlist(listen, extra string) []string {
-	host, _, err := net.SplitHostPort(listen)
-	if err != nil {
-		host = ""
-	}
+	host, _, _ := net.SplitHostPort(listen)
 	var extras []string
 	for _, h := range strings.Split(extra, ",") {
 		if h = strings.TrimSpace(h); h != "" {
@@ -109,6 +106,15 @@ func hostAllowlist(listen, extra string) []string {
 		hosts = append(hosts, host)
 	}
 	return append(hosts, extras...)
+}
+
+// displayVersion prefixes release numbers with "v" (0.1.0 -> v0.1.0) and leaves
+// anything else, such as "dev" or a git describe string, as it is.
+func displayVersion(v string) string {
+	if v != "" && v[0] >= '0' && v[0] <= '9' {
+		return "v" + v
+	}
+	return v
 }
 
 func isLoopback(addr string) bool {

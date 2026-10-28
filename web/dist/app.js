@@ -45,11 +45,8 @@
   const ACT_LABEL = { ACCEPT: "Allow", DROP: "Block", REJECT: "Reject", RETURN: "Return" };
   const VERDICT = { ACCEPT: "Allowed", DROP: "Dropped", REJECT: "Rejected" };
 
-  // Same protected list as the server (rules.go)
-  const isProtectedName = (n) =>
-    /^(KUBE-|cali-|LIBVIRT_|ufw-)/.test(n || "") || n === "DOCKER" || /^DOCKER-ISOLATION/.test(n || "");
-  // System chains hidden by default
-  const isSystemChain = (n) => isProtectedName(n) || /^(ts-|UFW-)/.test(n || "");
+  // System chains hidden by default: managed (protected) chains plus Tailscale and UFW helpers
+  const isSystemChain = (ch) => ch.protected || /^(ts-|UFW-)/.test(ch.name || "");
 
   let state = null;
   let activeTable = "filter";
@@ -61,7 +58,6 @@
   let lastFocus = null;
   let showSystem = false;
   let focusChain = null; // { table, chain, scrolled }
-  let persistent = false;
 
   const kb = (bytes) => (bytes / 1024).toFixed(1) + " KB";
   const ruleSpec = (raw) => String(raw || "").replace(/^\[\d+:\d+\]\s*/, "").replace(/^-A\s+\S+\s*/, "");
@@ -216,8 +212,7 @@
       setConn(true);
       state = d.state;
       $("mock-strip").hidden = !state.is_mock;
-      $("ver").textContent = /^v?\d/.test(d.version || "") ? "v" + String(d.version).replace(/^v/, "") : (d.version || "");
-      persistent = !!d.persistent;
+      $("ver").textContent = d.version || "";
       bannerOn = !!d.watchdog_pending;
       remaining = d.watchdog_rem_sec || 0;
       $("banner").hidden = !bannerOn;
@@ -253,7 +248,7 @@
   }
 
   function ruleRow(r, chain) {
-    const locked = isProtectedName(chain) || isProtectedName(r.target);
+    const locked = r.protected;
     const dis = locked ? "disabled" : "";
     const tip = locked ? "Managed by Docker, Kubernetes, libvirt or ufw. It cannot be changed here." : "";
     const attrs = `data-chain="${esc(chain)}" data-num="${r.id}" data-raw="${esc(r.raw_rule)}" data-spec="${esc(ruleSpec(r.raw_rule))}"`;
@@ -326,7 +321,7 @@
     names.forEach((n) => {
       const ch = tbl.chains[n];
       if (!ch) return;
-      if (!showSystem && isSystemChain(n)) { hidden++; return; }
+      if (!showSystem && isSystemChain(ch)) { hidden++; return; }
       const hl = !!focusChain && focusChain.table === activeTable && focusChain.chain === n;
       cards.push(chainCard(ch, hl));
     });
@@ -590,8 +585,8 @@
   $("btn-add").addEventListener("click", addRule);
   $("btn-confirm").addEventListener("click", async () => {
     try {
-      await api("/api/v1/confirm", { method: "POST" });
-      toast(persistent ? "Change confirmed and saved to disk." : "Change confirmed. It is active until reboot (no --persist-file set).", "ok");
+      const r = await api("/api/v1/confirm", { method: "POST" });
+      toast(r && r.persisted ? "Change confirmed and saved to disk." : "Change confirmed. It is active until reboot (no --persist-file set).", "ok");
     } catch (e) {
       toast(e.message, "error");
     }

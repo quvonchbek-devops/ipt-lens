@@ -52,8 +52,8 @@ To try against a real firewall, use a throwaway VM or container with
 - **Every change needs an exact undo.** A change is a list of steps; each step's
   undo reverses exactly that step.
 - **Never touch managed chains.** Docker, Kubernetes, Calico, libvirt and ufw own
-  their chains. The protected list lives in `internal/iptables/rules.go` and is
-  mirrored in `web/dist/app.js`.
+  their chains. The protected list lives in `internal/iptables/rules.go`; the UI
+  reads the `protected` flag from the API.
 - **Be honest in the simulator.** If something cannot be evaluated, say so in the
   result rather than guessing silently.
 
