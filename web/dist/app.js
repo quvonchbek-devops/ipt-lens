@@ -12,8 +12,7 @@
   };
 
   const TOKEN_KEY = "iptlens_token";
-  const BASE_KEY = "iptlens_base";
-  const PENDING_MSG = "Qoida qo'llandi. 60 soniya ichida Tasdiqlang, aks holda avtomatik qaytariladi.";
+  const PENDING_MSG = "Change applied. Confirm it in the yellow bar, or it is rolled back automatically.";
 
   const svg = (d) => `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
   const ICON = {
@@ -24,32 +23,32 @@
     x: svg('<path d="M18 6 6 18M6 6l12 12"/>'),
   };
 
-  // Tushuntirishlar (faqat ko'rsatish uchun)
+  // Descriptions (display only)
   const CHAIN_INFO = {
-    INPUT: "Serverning o'ziga kiruvchi trafik (SSH, Web panel, servislar).",
-    OUTPUT: "Serverdan chiquvchi trafik.",
-    FORWARD: "Server orqali o'tuvchi trafik (konteynerlar, VPN).",
-    "DOCKER-USER": "Docker konteynerlariga o'tuvchi trafik. Bu yerdagi qoidalar Docker qoidalaridan oldin ishlaydi.",
-    PREROUTING: "Paket kelgan paytda, manzil o'zgartirishdan oldin.",
-    POSTROUTING: "Paket chiqayotganda, manzil o'zgartirishdan keyin.",
+    INPUT: "Traffic to the server itself (SSH, this panel, local services).",
+    OUTPUT: "Traffic leaving the server.",
+    FORWARD: "Traffic passing through the server (containers, VPN).",
+    "DOCKER-USER": "Traffic forwarded to Docker containers. These rules run before Docker's own rules.",
+    PREROUTING: "When a packet arrives, before address translation.",
+    POSTROUTING: "When a packet leaves, after address translation.",
   };
   const TABLE_INFO = {
-    filter: "Ruxsat va taqiqlash qoidalari (asosiy firewall).",
-    nat: "Manzil o'zgartirish qoidalari (NAT, port yo'naltirish).",
-    mangle: "Paketlarni belgilash qoidalari.",
-    raw: "Kuzatuvdan oldin ishlaydigan qoidalar.",
+    filter: "Allow and block rules (the main firewall).",
+    nat: "Address translation rules (NAT, port forwarding).",
+    mangle: "Packet marking rules.",
+    raw: "Rules that run before connection tracking.",
   };
   const WHERE_HINT = {
-    INPUT: "Serverning o'ziga kiruvchi trafikka ta'sir qiladi. Masalan, SSH yoki Web panel uchun.",
-    "DOCKER-USER": "Docker konteynerlariga o'tuvchi trafikka ta'sir qiladi. Serverning o'ziga ta'sir qilmaydi.",
+    INPUT: "Affects traffic to the server itself, such as SSH or this panel.",
+    "DOCKER-USER": "Affects traffic to Docker containers. Does not affect the server itself.",
   };
-  const ACT_LABEL = { ACCEPT: "Ruxsat", DROP: "Taqiq", REJECT: "Rad etish", RETURN: "Qaytish" };
-  const VERDICT = { ACCEPT: "RUXSAT BERILADI", DROP: "TAQIQLANADI", REJECT: "RAD ETILADI" };
+  const ACT_LABEL = { ACCEPT: "Allow", DROP: "Block", REJECT: "Reject", RETURN: "Return" };
+  const VERDICT = { ACCEPT: "Allowed", DROP: "Dropped", REJECT: "Rejected" };
 
-  // Server (rules.go) bilan bir xil himoya ro'yxati
+  // Same protected list as the server (rules.go)
   const isProtectedName = (n) =>
     /^(KUBE-|cali-|LIBVIRT_|ufw-)/.test(n || "") || n === "DOCKER" || /^DOCKER-ISOLATION/.test(n || "");
-  // Standart holatda yashiriladigan tizim zanjirlari
+  // System chains hidden by default
   const isSystemChain = (n) => isProtectedName(n) || /^(ts-|UFW-)/.test(n || "");
 
   let state = null;
@@ -62,24 +61,24 @@
   let lastFocus = null;
   let showSystem = false;
   let focusChain = null; // { table, chain, scrolled }
+  let persistent = false;
 
-  const baseUrl = () => localStorage.getItem(BASE_KEY) || "";
   const kb = (bytes) => (bytes / 1024).toFixed(1) + " KB";
   const ruleSpec = (raw) => String(raw || "").replace(/^\[\d+:\d+\]\s*/, "").replace(/^-A\s+\S+\s*/, "");
 
-  /* ---------- ulanish holati ---------- */
+  /* ---------- connection status ---------- */
   function setConn(ok) {
     $("conn").className = "pill " + (ok ? "pill-ok" : "pill-err");
-    $("conn-text").textContent = ok ? "Live" : "Ulanmagan";
+    $("conn-text").textContent = ok ? "Live" : "Disconnected";
   }
 
-  /* ---------- xabarnomalar ---------- */
+  /* ---------- toasts ---------- */
   function toast(msg, kind = "info") {
     const t = el("div", "toast " + kind);
     t.append(el("div", "toast-msg", msg));
     const x = el("button", "icon-ghost");
     x.innerHTML = ICON.x;
-    x.setAttribute("aria-label", "Yopish");
+    x.setAttribute("aria-label", "Dismiss");
     x.addEventListener("click", () => t.remove());
     t.append(x);
     $("toasts").append(t);
@@ -129,7 +128,7 @@
       title,
       body: [el("p", "modal-text", text), ...extra],
       actions: [
-        { label: "Bekor qilish", cls: "btn-ghost", onClick: dismissModal },
+        { label: "Cancel", cls: "btn-ghost", onClick: dismissModal },
         { label: okLabel, cls: danger ? "btn-danger" : "btn-primary", onClick: () => { closeModal(); onOk(); } },
       ],
     });
@@ -160,12 +159,12 @@
       const done = (val) => { tokenPromise = null; resolve(val); };
       openModal({
         title: "API token",
-        sub: "Server tokenini kiriting. U faqat shu brauzer sessiyasida saqlanadi.",
+        sub: "Enter the server token. It is kept only for this browser session.",
         body: [inp],
         onCancel: () => done(null),
         actions: [
-          { label: "Bekor qilish", cls: "btn-ghost", onClick: dismissModal },
-          { label: "Saqlash", cls: "btn-primary", onClick: () => {
+          { label: "Cancel", cls: "btn-ghost", onClick: dismissModal },
+          { label: "Use token", cls: "btn-primary", onClick: () => {
             const t = inp.value.trim();
             if (!t) return;
             sessionStorage.setItem(TOKEN_KEY, t);
@@ -186,14 +185,14 @@
 
     let res;
     try {
-      res = await fetch(baseUrl() + path, { method: opts.method || "GET", headers, body: opts.body });
+      res = await fetch(path, { method: opts.method || "GET", headers, body: opts.body });
     } catch {
-      throw new Error("Serverga ulanib bo'lmadi");
+      throw new Error("Cannot reach the server");
     }
 
     if (res.status === 401 && !retried) {
       const t = await askToken();
-      if (!t) throw new Error("Token kiritilmadi");
+      if (!t) throw new Error("No token entered");
       return api(path, opts, true);
     }
 
@@ -217,6 +216,8 @@
       setConn(true);
       state = d.state;
       $("mock-strip").hidden = !state.is_mock;
+      $("ver").textContent = /^v?\d/.test(d.version || "") ? "v" + String(d.version).replace(/^v/, "") : (d.version || "");
+      persistent = !!d.persistent;
       bannerOn = !!d.watchdog_pending;
       remaining = d.watchdog_rem_sec || 0;
       $("banner").hidden = !bannerOn;
@@ -231,7 +232,7 @@
     }
   }
 
-  /* ---------- yordamchi renderlar ---------- */
+  /* ---------- render helpers ---------- */
   function badge(v) {
     if (!v || !state || !state.enrich_map) return "";
     const raw = String(v).replace(/^!/, "");
@@ -241,8 +242,9 @@
     return ` <span class="badge badge-${t}">${esc(m.type)}: ${esc(m.name)}</span>`;
   }
 
-  const ifaceText = (v) => (v ? `${esc(v)}${badge(v)}` : `<span class="tert">istalgan</span>`);
-  const addrText = (v) => (!v || v === "0.0.0.0/0" ? `<span class="tert">istalgan</span>` : `${esc(v)}${badge(v)}`);
+  const ANY = `<span class="tert">any</span>`;
+  const ifaceText = (v) => (v ? `${esc(v)}${badge(v)}` : ANY);
+  const addrText = (v) => (!v || v === "0.0.0.0/0" ? ANY : `${esc(v)}${badge(v)}`);
 
   function actionPill(t, to) {
     const label = ACT_LABEL[t] || t;
@@ -253,40 +255,40 @@
   function ruleRow(r, chain) {
     const locked = isProtectedName(chain) || isProtectedName(r.target);
     const dis = locked ? "disabled" : "";
-    const tip = locked ? "Bu qoida Docker, Kubernetes yoki ufw tomonidan boshqariladi. O'zgartirib bo'lmaydi." : "";
+    const tip = locked ? "Managed by Docker, Kubernetes, libvirt or ufw. It cannot be changed here." : "";
     const attrs = `data-chain="${esc(chain)}" data-num="${r.id}" data-raw="${esc(r.raw_rule)}" data-spec="${esc(ruleSpec(r.raw_rule))}"`;
-    const extra = [r.ct_state && "holat: " + r.ct_state, r.dst_type && "manzil turi: " + r.dst_type, r.extra]
+    const extra = [r.ct_state && "state: " + r.ct_state, r.dst_type && "dst type: " + r.dst_type, r.extra]
       .filter(Boolean).join(" · ");
     return `
       <tr class="${r.packets > 0 ? "" : "zero"}">
         <td class="mono">${r.id}</td>
-        <td><div class="mono">${r.packets} paket</div><div class="sub mono">${kb(r.bytes)}</div></td>
+        <td><div class="mono">${r.packets} pkts</div><div class="sub mono">${kb(r.bytes)}</div></td>
         <td class="mono">${ifaceText(r.in_iface)}<span class="arrow">→</span>${ifaceText(r.out_iface)}</td>
-        <td class="mono">${r.proto && r.proto !== "all" ? esc(r.proto) : `<span class="tert">istalgan</span>`}</td>
+        <td class="mono">${r.proto && r.proto !== "all" ? esc(r.proto) : ANY}</td>
         <td class="mono">${addrText(r.source)}</td>
         <td class="mono">${addrText(r.destination)}</td>
-        <td class="mono">${r.dst_port ? esc(r.dst_port) : `<span class="tert">istalgan</span>`}</td>
+        <td class="mono">${r.dst_port ? esc(r.dst_port) : ANY}</td>
         <td>${actionPill(r.target, r.to_dest)}</td>
         <td class="cmt">${esc(r.comment || "")}${extra ? `<div class="sub">${esc(extra)}</div>` : ""}</td>
         <td class="acts">
           ${locked ? `<span class="lock" title="${esc(tip)}" aria-label="${esc(tip)}">${ICON.lock}</span>` : ""}
-          <button class="icon-ghost" data-act="edit" ${dis} ${attrs} aria-label="Tahrirlash" title="${locked ? esc(tip) : "Tahrirlash"}">${ICON.pencil}</button>
-          <button class="icon-ghost icon-danger" data-act="del" ${dis} ${attrs} aria-label="O'chirish" title="${locked ? esc(tip) : "O'chirish"}">${ICON.trash}</button>
+          <button class="icon-ghost" data-act="edit" ${dis} ${attrs} aria-label="Edit rule #${r.id}" title="${locked ? esc(tip) : "Edit rule"}">${ICON.pencil}</button>
+          <button class="icon-ghost icon-danger" data-act="del" ${dis} ${attrs} aria-label="Delete rule #${r.id}" title="${locked ? esc(tip) : "Delete rule"}">${ICON.trash}</button>
         </td>
       </tr>`;
   }
 
   function chainCard(ch, highlight) {
-    const info = CHAIN_INFO[ch.name] || (ch.is_custom ? "Maxsus zanjir. Boshqa zanjirlardan chaqiriladi." : "");
+    const info = CHAIN_INFO[ch.name] || (ch.is_custom ? "User-defined chain, reached by a jump from another chain." : "");
     const tag = ch.is_custom
-      ? `<span class="tag tag-custom">Maxsus</span>`
+      ? `<span class="tag tag-custom">User-defined</span>`
       : ch.policy === "DROP"
-        ? `<span class="tag tag-bad">Standart: taqiq</span>`
-        : `<span class="tag tag-ok">Standart: ruxsat</span>`;
+        ? `<span class="tag tag-bad">Policy: drop</span>`
+        : `<span class="tag tag-ok">Policy: accept</span>`;
     const rules = ch.rules || [];
     const rows = rules.length
       ? rules.map((r) => ruleRow(r, ch.name)).join("")
-      : `<tr><td colspan="10" class="empty-cell">Bu zanjirda hali qoida yo'q. Standart siyosat ishlaydi.</td></tr>`;
+      : `<tr><td colspan="10" class="empty-cell">No rules in this chain. The chain policy applies.</td></tr>`;
     return `
       <section class="card${highlight ? " hl" : ""}" data-chain="${esc(ch.name)}">
         <header class="card-h">
@@ -294,14 +296,14 @@
             <span class="chain-name">${ICON.chain}${esc(ch.name)}</span>
             ${tag}
           </div>
-          <span class="sp tert mono">${ch.packets} paket</span>
+          <span class="sp tert mono">${ch.packets} pkts</span>
         </header>
         ${info ? `<p class="card-sub">${esc(info)}</p>` : ""}
         <div class="scroll">
           <table>
             <thead><tr>
-              <th>#</th><th>Trafik</th><th>Yo'nalish</th><th>Protokol</th><th>Kimdan</th>
-              <th>Kimga</th><th>Port</th><th>Harakat</th><th>Izoh</th><th></th>
+              <th>#</th><th>Traffic</th><th>Interfaces</th><th>Protocol</th><th>Source</th>
+              <th>Destination</th><th>Port</th><th>Action</th><th>Comment</th><th><span class="sr-only">Actions</span></th>
             </tr></thead>
             <tbody>${rows}</tbody>
           </table>
@@ -314,7 +316,7 @@
     $("table-desc").textContent = TABLE_INFO[activeTable] || "";
     const tbl = state && state.tables[activeTable];
     if (!tbl) {
-      box.innerHTML = `<p class="empty">Bu jadval topilmadi</p>`;
+      box.innerHTML = `<p class="empty">This table is not loaded on the server.</p>`;
       $("sys-count").textContent = "";
       return;
     }
@@ -328,8 +330,8 @@
       const hl = !!focusChain && focusChain.table === activeTable && focusChain.chain === n;
       cards.push(chainCard(ch, hl));
     });
-    $("sys-count").textContent = hidden && !showSystem ? `${hidden} ta tizim zanjiri yashirin` : "";
-    box.innerHTML = cards.length ? cards.join("") : `<p class="empty">Ko'rsatiladigan zanjir yo'q</p>`;
+    $("sys-count").textContent = hidden && !showSystem ? `${hidden} system chain${hidden === 1 ? "" : "s"} hidden` : "";
+    box.innerHTML = cards.length ? cards.join("") : `<p class="empty">No chains to show. Turn on "Show system chains" to see managed chains.</p>`;
 
     if (focusChain && !focusChain.scrolled) {
       const c = box.querySelector(".card.hl");
@@ -347,30 +349,32 @@
     render();
   }
 
-  /* ---------- simulyator ---------- */
+  /* ---------- simulator ---------- */
   function explain(s) {
     const a = s.action || "";
-    if (a === "ENTER_CHAIN") return "Paket shu zanjirga kirdi.";
-    if (a === "RETURN") return "Zanjir oxiriga yetdi, paket asosiy zanjirga qaytdi.";
-    if (a.startsWith("DEFAULT_POLICY")) return "Hech bir qoida mos kelmadi, standart siyosat qo'llandi.";
-    if (a.startsWith("MATCH -> JUMP")) return "Qoida paketni boshqa zanjirga yo'naltirdi.";
-    if (a === "MATCH -> ACCEPT") return "Qoida mos keldi: paketga ruxsat berildi.";
-    if (a === "MATCH -> DROP") return "Qoida mos keldi: paket taqiqlandi.";
-    if (a === "MATCH -> REJECT") return "Qoida mos keldi: paket rad etildi.";
-    if (a === "MATCH -> RETURN") return "Qoida mos keldi: paket qaytarildi.";
-    if (/DNAT|REDIRECT/.test(a)) return "Qoida mos keldi: manzil o'zgartirildi.";
-    if (/SNAT|MASQUERADE/.test(a)) return "Qoida mos keldi: manba manzili almashtirildi.";
-    return s.note || "";
+    let text = s.note || "";
+    if (a === "ENTER_CHAIN") text = "The packet entered this chain.";
+    else if (a === "RETURN") text = "End of chain; the packet returns to the calling chain.";
+    else if (a.startsWith("DEFAULT_POLICY")) text = "No rule matched, so the chain policy applies.";
+    else if (a.startsWith("MATCH -> JUMP")) text = "The rule sent the packet to another chain.";
+    else if (a === "MATCH -> ACCEPT") text = "Rule matched: the packet is accepted.";
+    else if (a === "MATCH -> DROP") text = "Rule matched: the packet is dropped.";
+    else if (a === "MATCH -> REJECT") text = "Rule matched: the packet is rejected.";
+    else if (a === "MATCH -> RETURN") text = "Rule matched: the packet returns to the calling chain.";
+    else if (/DNAT|REDIRECT/.test(a)) text = "Rule matched: the destination is rewritten.";
+    else if (/SNAT|MASQUERADE/.test(a)) text = "Rule matched: the source address is rewritten.";
+    if (a !== "ENTER_CHAIN" && s.note && text !== s.note) text += " " + s.note;
+    return text;
   }
 
   function shortAct(a) {
-    if (a === "ENTER_CHAIN") return "kirish";
-    if (a === "RETURN" || a === "MATCH -> RETURN") return "qaytish";
-    if (a.startsWith("DEFAULT_POLICY")) return "standart";
-    if (a.startsWith("MATCH -> JUMP")) return "o'tish";
-    if (a === "MATCH -> ACCEPT") return "ruxsat";
-    if (a === "MATCH -> DROP") return "taqiq";
-    if (a === "MATCH -> REJECT") return "rad";
+    if (a === "ENTER_CHAIN") return "enter";
+    if (a === "RETURN" || a === "MATCH -> RETURN") return "return";
+    if (a.startsWith("DEFAULT_POLICY")) return "policy";
+    if (a.startsWith("MATCH -> JUMP")) return "jump";
+    if (a === "MATCH -> ACCEPT") return "accept";
+    if (a === "MATCH -> DROP") return "drop";
+    if (a === "MATCH -> REJECT") return "reject";
     return a.replace(/^MATCH -> /, "");
   }
 
@@ -380,6 +384,10 @@
       <b>${esc(VERDICT[r.final_verdict] || r.final_verdict)}</b>
       <div class="sub mono">${esc(r.final_verdict)}${r.final_dst ? " → " + esc(r.final_dst) : ""}</div>
     </div></div>`;
+    if (r.uncertain) {
+      h += `<div class="warn-note"><b>Approximate result.</b> Some rules use matches the simulator cannot evaluate and were assumed to match:<ul>${
+        (r.warnings || []).map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div>`;
+    }
     h += `<ol class="timeline">`;
     (r.steps || []).forEach((s, i) => {
       if (s.action === "INFO") {
@@ -420,7 +428,7 @@
     }
   }
 
-  /* ---------- yangi qoida qo'shish ---------- */
+  /* ---------- add rule ---------- */
   function ruleFromForm() {
     const parts = [];
     const src = $("add-src").value.trim();
@@ -440,19 +448,19 @@
     $("add-where-hint").textContent = WHERE_HINT[where] || "";
     const rule = ruleFromForm();
     const allow = $("add-action").value === "ACCEPT";
-    const who = $("add-src").value.trim() || "istalgan manba";
+    const who = $("add-src").value.trim() || "any source";
     const ifc = $("add-iface").value.trim();
     const proto = $("add-proto").value;
     const port = $("add-port").value.trim();
     const what = port
-      ? `${proto.toUpperCase()} ${port}-port`
-      : proto ? `${proto.toUpperCase()} protokoli` : "istalgan trafik";
+      ? `${proto.toUpperCase()} port ${port}`
+      : proto ? `all ${proto.toUpperCase()}` : "all traffic";
     const pv = $("add-preview");
     pv.innerHTML =
-      `<div>Manba: <b>${esc(who)}</b>${ifc ? ` (${esc(ifc)} interfeysi)` : ""}, ${esc(what)} → ` +
-      `<b class="${allow ? "ok" : "bad"}">${allow ? "ruxsat beriladi" : "taqiqlanadi"}</b></div>` +
-      `<div class="sub">Qo'llanadigan buyruq: <code>-I ${esc(where)} 1 ${esc(rule)}</code></div>` +
-      (!allow && where === "INPUT" ? `<div class="warn-note">Diqqat: bu serverga kirishni (SSH, panel) uzishi mumkin.</div>` : "");
+      `<div>From <b>${esc(who)}</b>${ifc ? ` on ${esc(ifc)}` : ""}, ${esc(what)} → ` +
+      `<b class="${allow ? "ok" : "bad"}">${allow ? "allowed" : "blocked"}</b></div>` +
+      `<div class="sub">Command: <code>-I ${esc(where)} 1 ${esc(rule)}</code></div>` +
+      (!allow && where === "INPUT" ? `<div class="warn-note">Careful: this can cut off your own access to the server (SSH, this panel).</div>` : "");
   }
 
   function addRule() {
@@ -464,15 +472,15 @@
     const src = $("add-src").value.trim();
 
     if (port && (!/^\d+$/.test(port) || +port < 1 || +port > 65535)) {
-      toast("Port 1 dan 65535 gacha raqam bo'lishi kerak", "error");
+      toast("Port must be a number from 1 to 65535.", "error");
       return;
     }
     if (port && !proto) {
-      toast("Port uchun protokol tanlang (TCP yoki UDP)", "error");
+      toast("Choose TCP or UDP to filter by port.", "error");
       return;
     }
     if (action === "ACCEPT" && !port && !iface && !src) {
-      toast("Port, interfeys yoki manbadan kamida bittasini kiriting. Aks holda hamma trafikka ruxsat beriladi.", "error");
+      toast("Set a port, interface or source. Without one, this rule would allow all traffic.", "error");
       return;
     }
 
@@ -485,9 +493,9 @@
 
     if (action === "DROP" && where === "INPUT") {
       confirmModal({
-        title: "Taqiqlash qoidasi",
-        text: "Bu qoida serverning o'ziga kirishni (SSH, panel) uzishi mumkin. Davom etasizmi?",
-        okLabel: "Ha, qo'shish",
+        title: "Add a block rule to INPUT?",
+        text: "This rule can cut off your own access to the server (SSH, this panel). If it does, it is rolled back when the confirmation time runs out.",
+        okLabel: "Add block rule",
         danger: true,
         onOk: go,
       });
@@ -496,7 +504,7 @@
     go();
   }
 
-  /* ---------- amallar ---------- */
+  /* ---------- actions ---------- */
   async function doAction(path, body, okMsg = PENDING_MSG, onOk = null) {
     try {
       await api(path, { method: "POST", body: JSON.stringify(body) });
@@ -519,20 +527,20 @@
     ta.spellcheck = false;
     ta.value = d.spec;
     openModal({
-      title: "Qoidani o'zgartirish",
-      sub: `${d.chain} · qoida #${d.num}`,
+      title: "Edit rule",
+      sub: `${d.chain} · rule #${d.num}`,
       body: [
-        el("div", "field-label", "Hozirgi qoida"),
+        el("div", "field-label", "Current rule"),
         el("pre", "code-block mono", d.spec),
-        el("div", "field-label", "Yangi qoida (iptables flaglari)"),
+        el("div", "field-label", "New rule (iptables options)"),
         ta,
-        el("p", "hint", "Saqlangach o'zgarish vaqtinchalik qo'llanadi. 60 soniya ichida tasdiqlanmasa, eski holatiga qaytadi."),
+        el("p", "hint", "The edit is applied temporarily. If you do not confirm it in time, the old rule is restored."),
       ],
       actions: [
-        { label: "Bekor qilish", cls: "btn-ghost", onClick: dismissModal },
-        { label: "Saqlash", cls: "btn-primary", onClick: () => {
+        { label: "Cancel", cls: "btn-ghost", onClick: dismissModal },
+        { label: "Apply edit", cls: "btn-primary", onClick: () => {
           const nv = ta.value.trim();
-          if (!nv) { toast("Qoida bo'sh bo'lishi mumkin emas", "error"); return; }
+          if (!nv) { toast("The rule cannot be empty.", "error"); return; }
           closeModal();
           doAction("/api/v1/rules/edit", { ...reqBody(d), rule: nv });
         } },
@@ -542,45 +550,19 @@
 
   function openDelete(d) {
     confirmModal({
-      title: "Qoidani o'chirish",
-      text: `${d.chain} · #${d.num} qoidasini o'chirasizmi?`,
-      okLabel: "O'chirish",
+      title: "Delete rule?",
+      text: `Delete rule #${d.num} from ${d.chain}?`,
+      okLabel: "Delete rule",
       danger: true,
       extra: [
         el("pre", "code-block mono", d.spec),
-        el("p", "hint", "O'chirilgan qoida 60 soniya ichida tasdiqlanmasa, qaytariladi."),
+        el("p", "hint", "If you do not confirm the deletion in time, the rule is restored."),
       ],
       onOk: () => doAction("/api/v1/rules/delete", reqBody(d)),
     });
   }
 
-  function openSettings() {
-    const inp = el("input", "mono");
-    inp.value = localStorage.getItem(BASE_KEY) || "";
-    inp.placeholder = "bo'sh = joriy server";
-    openModal({
-      title: "Sozlamalar",
-      sub: "Server manzili",
-      body: [
-        el("div", "field-label", "Server manzili (ixtiyoriy)"),
-        inp,
-        el("p", "hint", "Bo'sh qoldirsangiz, UI joylashgan server ishlatiladi."),
-      ],
-      actions: [
-        { label: "Bekor qilish", cls: "btn-ghost", onClick: dismissModal },
-        { label: "Saqlash", cls: "btn-primary", onClick: () => {
-          const v = inp.value.trim().replace(/\/+$/, "");
-          if (v) localStorage.setItem(BASE_KEY, v);
-          else localStorage.removeItem(BASE_KEY);
-          closeModal();
-          lastSig = "";
-          refresh();
-        } },
-      ],
-    });
-  }
-
-  /* ---------- hodisalar ---------- */
+  /* ---------- events ---------- */
   $("chains").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-act]");
     if (!b || b.disabled) return;
@@ -606,11 +588,10 @@
 
   $("btn-sim").addEventListener("click", simulate);
   $("btn-add").addEventListener("click", addRule);
-  $("btn-settings").addEventListener("click", openSettings);
   $("btn-confirm").addEventListener("click", async () => {
     try {
       await api("/api/v1/confirm", { method: "POST" });
-      toast("Tasdiqlandi. Qoida doimiy saqlandi.", "ok");
+      toast(persistent ? "Change confirmed and saved to disk." : "Change confirmed. It is active until reboot (no --persist-file set).", "ok");
     } catch (e) {
       toast(e.message, "error");
     }
@@ -618,7 +599,7 @@
     refresh();
   });
 
-  /* ---------- taymerlar ---------- */
+  /* ---------- timers ---------- */
   setInterval(() => {
     if (bannerOn && remaining > 0) {
       remaining--;

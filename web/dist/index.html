@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="uz">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11,108 +11,105 @@
     <div class="brand">
       <span class="logo">IP</span>
       <span class="title">IPT-Lens</span>
-      <span class="ver">v1.1</span>
-      <span id="conn" class="pill pill-muted"><i class="dot"></i><span id="conn-text">Ulanmoqda</span></span>
+      <span id="ver" class="ver"></span>
+      <span id="conn" class="pill pill-muted"><i class="dot"></i><span id="conn-text">Connecting</span></span>
     </div>
-    <nav class="seg" aria-label="Jadvallar">
-      <button class="seg-btn active" data-table="filter" title="Ruxsat va taqiqlash qoidalari">FILTER</button>
-      <button class="seg-btn" data-table="nat" title="Manzil o'zgartirish (NAT)">NAT</button>
-      <button class="seg-btn" data-table="mangle" title="Paketlarni belgilash">MANGLE</button>
-      <button class="seg-btn" data-table="raw" title="Kuzatuvdan oldingi qoidalar">RAW</button>
+    <nav class="seg" aria-label="Tables">
+      <button class="seg-btn active" data-table="filter" title="Allow and block rules">FILTER</button>
+      <button class="seg-btn" data-table="nat" title="Address translation (NAT)">NAT</button>
+      <button class="seg-btn" data-table="mangle" title="Packet marking">MANGLE</button>
+      <button class="seg-btn" data-table="raw" title="Rules before connection tracking">RAW</button>
     </nav>
-    <button id="btn-settings" class="icon-ghost" aria-label="Sozlamalar" title="Sozlamalar">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
-    </button>
   </header>
 
-  <div id="mock-strip" class="strip" hidden>DEMO rejim: bu haqiqiy firewall emas, namuna ma'lumot</div>
+  <div id="mock-strip" class="strip" hidden>Demo mode: sample data, not a real firewall</div>
 
   <div id="banner" class="banner" hidden>
-    <span class="banner-text">Yangi qoida vaqtinchalik qo'shildi. <b class="mono" id="wd-timer">60</b> soniya ichida Tasdiqlash ni bosing, aks holda qoida avtomatik o'chadi.</span>
-    <button id="btn-confirm" class="btn btn-warn btn-sm">Tasdiqlash</button>
+    <span class="banner-text">A change is applied temporarily. Confirm within <b class="mono" id="wd-timer">60</b> seconds, or it is rolled back automatically.</span>
+    <button id="btn-confirm" class="btn btn-warn btn-sm">Confirm change</button>
   </div>
 
   <main class="layout">
     <aside class="sidebar">
       <details class="help" open>
-        <summary>Bu nima va qanday ishlaydi?</summary>
+        <summary>How this works</summary>
         <ul>
-          <li><b>INPUT</b>: serverning o'ziga kiruvchi trafik (SSH, Web panel).</li>
-          <li><b>DOCKER-USER</b>: Docker konteynerlariga o'tuvchi trafik.</li>
-          <li>Yangi qoida <b>60 soniya</b> vaqtinchalik turadi. Sariq panelda <b>Tasdiqlash</b> bossangiz, u doimiy bo'ladi. Bosmasangiz, o'chadi.</li>
-          <li>Qulf belgisi bor qoidalar Docker, Kubernetes yoki ufw tomonidan boshqariladi, ularni o'zgartirib bo'lmaydi.</li>
+          <li><b>INPUT</b>: traffic to the server itself (SSH, this panel).</li>
+          <li><b>DOCKER-USER</b>: traffic forwarded to Docker containers.</li>
+          <li>Every change is temporary at first. Press <b>Confirm change</b> in the yellow bar to keep it; otherwise it is rolled back.</li>
+          <li>Rules with a lock are managed by Docker, Kubernetes, libvirt or ufw and cannot be changed here.</li>
         </ul>
       </details>
 
       <section class="panel">
         <header class="panel-h">
-          <h2>Paket simulyatori</h2>
-          <p>Paket qaysi qoidaga tushishini oldindan tekshiradi. Haqiqiy paket yubormaydi.</p>
+          <h2>Packet simulator</h2>
+          <p>Shows which rule a packet would hit. No packet is sent.</p>
         </header>
         <div class="grid2">
-          <label>Qayerdan (manba IP)<input id="sim-src" class="mono" value="100.64.0.15"></label>
-          <label>Qayerga (manzil IP)<input id="sim-dst" class="mono" value="172.18.0.4"></label>
-          <label>Kirish interfeysi<input id="sim-in" class="mono" value="wg0"></label>
-          <label>Chiqish interfeysi<input id="sim-out" class="mono" value="docker0"></label>
-          <label>Protokol
+          <label>Source IP<input id="sim-src" class="mono" value="100.64.0.15"></label>
+          <label>Destination IP<input id="sim-dst" class="mono" value="172.18.0.4"></label>
+          <label>In interface<input id="sim-in" class="mono" value="wg0"></label>
+          <label>Out interface<input id="sim-out" class="mono" value="docker0"></label>
+          <label>Protocol
             <select id="sim-proto"><option>tcp</option><option>udp</option><option>icmp</option></select>
           </label>
           <label>Port<input id="sim-port" class="mono" value="5432"></label>
-          <label class="span2">Ulanish holati
+          <label class="span2">Connection state
             <select id="sim-ct">
-              <option value="NEW">Yangi ulanish (NEW)</option>
-              <option value="ESTABLISHED">Davom etayotgan (ESTABLISHED)</option>
-              <option value="RELATED">Bog'liq ulanish (RELATED)</option>
+              <option value="NEW">New connection (NEW)</option>
+              <option value="ESTABLISHED">Established (ESTABLISHED)</option>
+              <option value="RELATED">Related (RELATED)</option>
             </select>
           </label>
         </div>
-        <button id="btn-sim" class="btn btn-primary btn-block">Tekshirish</button>
+        <button id="btn-sim" class="btn btn-primary btn-block">Simulate packet</button>
         <div id="sim-result" hidden></div>
       </section>
 
       <section class="panel">
         <header class="panel-h">
-          <h2>Yangi ruxsat qo'shish</h2>
-          <p>Masalan: VPN (wg0) orqali 8080 portga kirishga ruxsat berish.</p>
+          <h2>Add a rule</h2>
+          <p>For example: allow port 8080 over the VPN (wg0).</p>
         </header>
         <div class="grid2">
-          <label class="span2">Qayerga qo'llansin?
+          <label class="span2">Apply to
             <select id="add-where">
-              <option value="INPUT">Serverning o'ziga (INPUT)</option>
-              <option value="DOCKER-USER">Docker konteynerlariga (DOCKER-USER)</option>
+              <option value="INPUT">The server itself (INPUT)</option>
+              <option value="DOCKER-USER">Docker containers (DOCKER-USER)</option>
             </select>
           </label>
-          <label>Harakat
+          <label>Action
             <select id="add-action">
-              <option value="ACCEPT">Ruxsat berish</option>
-              <option value="DROP">Taqiqlash</option>
+              <option value="ACCEPT">Allow</option>
+              <option value="DROP">Block</option>
             </select>
           </label>
-          <label>Protokol
+          <label>Protocol
             <select id="add-proto">
               <option value="tcp">TCP</option>
               <option value="udp">UDP</option>
-              <option value="">Istalgan</option>
+              <option value="">Any</option>
             </select>
           </label>
           <label>Port<input id="add-port" class="mono" inputmode="numeric" placeholder="8080"></label>
-          <label>Interfeys<input id="add-iface" class="mono" placeholder="wg0"></label>
-          <label class="span2">Manba IP (ixtiyoriy)<input id="add-src" class="mono" placeholder="bo'sh = hamma manba"></label>
+          <label>Interface<input id="add-iface" class="mono" placeholder="wg0"></label>
+          <label class="span2">Source IP (optional)<input id="add-src" class="mono" placeholder="empty = any source"></label>
         </div>
         <p id="add-where-hint" class="hint"></p>
         <div id="add-preview" class="preview"></div>
-        <button id="btn-add" class="btn btn-primary btn-block">Qo'shish</button>
-        <p class="hint">Qoida zanjirning eng boshiga (1-o'rin) qo'yiladi. Keyin Tasdiqlang.</p>
+        <button id="btn-add" class="btn btn-primary btn-block">Add rule</button>
+        <p class="hint">The rule is inserted at the top of the chain (position 1). Confirm it afterwards.</p>
       </section>
     </aside>
 
     <section class="main">
       <div class="toolbar">
         <div>
-          <h1>Qoidalar</h1>
+          <h1>Rules</h1>
           <p id="table-desc" class="hint"></p>
         </div>
-        <label class="check"><input id="show-sys" type="checkbox"> Tizim zanjirlarini ko'rsatish</label>
+        <label class="check"><input id="show-sys" type="checkbox"> Show system chains</label>
         <span id="sys-count" class="hint"></span>
       </div>
       <div id="chains" class="chains"></div>
