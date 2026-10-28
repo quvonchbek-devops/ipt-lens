@@ -104,9 +104,8 @@ func (w *Watchdog) DeleteRule(table, chain string, num int, expect string) error
 		}
 		n := strconv.Itoa(num)
 		return plan{
-			desc:    fmt.Sprintf("o'chirish %s/%s #%d", table, chain, num),
-			forward: [][]string{{"-t", table, "-D", chain, n}},
-			undo:    [][]string{append([]string{"-t", table, "-I", chain, n}, ruleArgs(r.RawRule)...)},
+			desc:  fmt.Sprintf("o'chirish %s/%s #%d", table, chain, num),
+			steps: []step{{do: []string{"-t", table, "-D", chain, n}, undo: append([]string{"-t", table, "-I", chain, n}, ruleArgs(r.RawRule)...)}},
 		}, nil
 	})
 }
@@ -127,9 +126,8 @@ func (w *Watchdog) EditRule(table, chain string, num int, expect, newRule string
 		}
 		n := strconv.Itoa(num)
 		return plan{
-			desc:    fmt.Sprintf("tahrirlash %s/%s #%d", table, chain, num),
-			forward: [][]string{append([]string{"-t", table, "-R", chain, n}, spec...)},
-			undo:    [][]string{append([]string{"-t", table, "-R", chain, n}, ruleArgs(r.RawRule)...)},
+			desc:  fmt.Sprintf("tahrirlash %s/%s #%d", table, chain, num),
+			steps: []step{{do: append([]string{"-t", table, "-R", chain, n}, spec...), undo: append([]string{"-t", table, "-R", chain, n}, ruleArgs(r.RawRule)...)}},
 		}, nil
 	})
 }
