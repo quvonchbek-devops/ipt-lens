@@ -24,23 +24,24 @@ type Chain struct {
 }
 
 type Rule struct {
-	ID          int    `json:"id"`
-	Packets     uint64 `json:"packets"`
-	Bytes       uint64 `json:"bytes"`
-	InIface     string `json:"in_iface"`
-	OutIface    string `json:"out_iface"`
-	Proto       string `json:"proto"`
-	Source      string `json:"source"`
-	Destination string `json:"destination"`
-	SrcPort     string `json:"src_port"`
-	DstPort     string `json:"dst_port"`
-	CtState     string `json:"ct_state"`
-	DstType     string `json:"dst_type"`
-	Target      string `json:"target"`
-	ToDest      string `json:"to_dest"`
-	Comment     string `json:"comment"`
-	Extra       string `json:"extra"`
-	RawRule     string `json:"raw_rule"`
+	ID          int      `json:"id"`
+	Packets     uint64   `json:"packets"`
+	Bytes       uint64   `json:"bytes"`
+	InIface     string   `json:"in_iface"`
+	OutIface    string   `json:"out_iface"`
+	Proto       string   `json:"proto"`
+	Source      string   `json:"source"`
+	Destination string   `json:"destination"`
+	SrcPort     string   `json:"src_port"`
+	DstPort     string   `json:"dst_port"`
+	CtState     string   `json:"ct_state"`
+	DstType     string   `json:"dst_type"`
+	Target      string   `json:"target"`
+	ToDest      string   `json:"to_dest"`
+	Comment     string   `json:"comment"`
+	Extra       string   `json:"extra"`
+	RawRule     string   `json:"raw_rule"`
+	Unsupported []string `json:"unsupported,omitempty"`
 }
 
 type MetaInfo struct {
@@ -71,4 +72,6 @@ type SimResult struct {
 	FinalVerdict string    `json:"final_verdict"`
 	FinalDst     string    `json:"final_dst"`
 	Steps        []SimStep `json:"steps"`
+	Uncertain    bool      `json:"uncertain"`
+	Warnings     []string  `json:"warnings"`
 }

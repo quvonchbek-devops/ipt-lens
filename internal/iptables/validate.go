@@ -9,17 +9,17 @@ import (
 )
 
 var (
-	ErrInvalid   = errors.New("noto'g'ri so'rov")
-	ErrDemo      = errors.New("demo rejimida firewall o'zgartirilmaydi")
-	ErrPending   = errors.New("avvalgi o'zgarish hali tasdiqlanmagan")
-	ErrNoPending = errors.New("tasdiqlanadigan o'zgarish yo'q")
-	ErrDuplicate = errors.New("bunday qoida allaqachon mavjud")
+	ErrInvalid   = errors.New("invalid request")
+	ErrDemo      = errors.New("the firewall cannot be changed in demo mode")
+	ErrPending   = errors.New("the previous change has not been confirmed yet")
+	ErrNoPending = errors.New("there is no change to confirm")
+	ErrDuplicate = errors.New("this rule already exists")
 )
 
 type ApplyRequest struct {
 	Table    string `json:"table"`
 	Chain    string `json:"chain"`
-	Position int    `json:"position"` // 0 = oxiriga (-A), N > 0 = N-pozitsiyaga (-I)
+	Position int    `json:"position"` // 0 = append (-A), N > 0 = insert at N (-I)
 	Rule     string `json:"rule"`
 }
 
@@ -31,7 +31,8 @@ var (
 	addrTypeRe = regexp.MustCompile(`^[A-Z]{3,12}$`)
 )
 
-// Ruxsat etilgan flaglar. Buyruq bilan bog'liq flaglar (-A, -F, -X, -P, -t ...) yo'q.
+// allowedFlags lists the rule options accepted from clients. Command flags
+// (-A, -F, -X, -P, -t, ...) are deliberately absent.
 var allowedFlags = map[string]bool{
 	"-i": true, "-o": true, "-p": true, "-s": true, "-d": true, "-m": true,
 	"--dport": true, "--sport": true, "--dports": true, "--sports": true,
@@ -48,18 +49,15 @@ var (
 		"INVALID": true, "UNTRACKED": true}
 )
 
-// ValidateRule qoida matnini tekshiradi va argumentlar ro'yxatini qaytaradi.
-// Shell ishlatilmaydi, argumentlar to'g'ridan-to'g'ri exec ga beriladi.
+// ValidateRule checks a rule spec and returns it as an argument list.
+// No shell is involved: the arguments are passed directly to exec.
 func ValidateRule(table, chain, spec string) ([]string, error) {
-	if !tableRe.MatchString(table) {
-		return nil, invalidf("jadval noto'g'ri: %q", table)
-	}
-	if !chainRe.MatchString(chain) {
-		return nil, invalidf("zanjir nomi noto'g'ri: %q", chain)
+	if err := checkNames(table, chain); err != nil {
+		return nil, err
 	}
 	tokens := tokenizeRule(spec)
 	if len(tokens) == 0 || len(tokens) > 64 {
-		return nil, invalidf("qoida bo'sh yoki juda uzun")
+		return nil, invalidf("rule is empty or too long")
 	}
 
 	hasJump := false
@@ -67,15 +65,15 @@ func ValidateRule(table, chain, spec string) ([]string, error) {
 		tok := tokens[i]
 		if tok == "!" {
 			if i+1 >= len(tokens) || !allowedFlags[tokens[i+1]] {
-				return nil, invalidf("'!' dan keyin flag kutiladi")
+				return nil, invalidf("'!' must be followed by an option")
 			}
 			continue
 		}
 		if !allowedFlags[tok] {
-			return nil, invalidf("ruxsat etilmagan flag: %s", tok)
+			return nil, invalidf("option not allowed: %s", tok)
 		}
 		if i+1 >= len(tokens) {
-			return nil, invalidf("%s uchun qiymat kerak", tok)
+			return nil, invalidf("%s needs a value", tok)
 		}
 		val := tokens[i+1]
 		i++
@@ -87,7 +85,7 @@ func ValidateRule(table, chain, spec string) ([]string, error) {
 		}
 	}
 	if !hasJump {
-		return nil, invalidf("-j (target) majburiy")
+		return nil, invalidf("-j (target) is required")
 	}
 	return tokens, nil
 }
@@ -96,45 +94,45 @@ func checkValue(flag, val string) error {
 	switch flag {
 	case "-i", "-o":
 		if !ifaceRe.MatchString(val) {
-			return invalidf("interfeys nomi noto'g'ri: %s", val)
+			return invalidf("invalid interface name: %s", val)
 		}
 	case "-p":
 		if !allowedProto[val] {
-			return invalidf("protokol noto'g'ri: %s", val)
+			return invalidf("invalid protocol: %s", val)
 		}
 	case "-s", "-d":
 		if _, _, err := net.ParseCIDR(val); err != nil && net.ParseIP(val) == nil {
-			return invalidf("IP yoki CIDR noto'g'ri: %s", val)
+			return invalidf("invalid IP or CIDR: %s", val)
 		}
 	case "--dport", "--sport", "--dports", "--sports":
 		if !portRe.MatchString(val) {
-			return invalidf("port noto'g'ri: %s", val)
+			return invalidf("invalid port: %s", val)
 		}
 	case "-j":
 		if !allowedTargets[val] {
-			return invalidf("target ruxsat etilmagan: %s (ACCEPT, DROP, REJECT, RETURN)", val)
+			return invalidf("target not allowed: %s (use ACCEPT, DROP, REJECT or RETURN)", val)
 		}
 	case "-m":
 		if !allowedModules[val] {
-			return invalidf("modul ruxsat etilmagan: %s", val)
+			return invalidf("match module not allowed: %s", val)
 		}
 	case "--ctstate", "--state":
 		for _, st := range strings.Split(val, ",") {
 			if !allowedStates[st] {
-				return invalidf("holat noto'g'ri: %s", st)
+				return invalidf("invalid connection state: %s", st)
 			}
 		}
 	case "--dst-type", "--src-type":
 		if !addrTypeRe.MatchString(val) {
-			return invalidf("address turi noto'g'ri: %s", val)
+			return invalidf("invalid address type: %s", val)
 		}
 	case "--comment":
 		if len(val) > 128 {
-			return invalidf("izoh 128 belgidan uzun bo'lmasligi kerak")
+			return invalidf("comment must be at most 128 characters")
 		}
 		for _, r := range val {
 			if r < 32 || r == 127 {
-				return invalidf("izohda boshqaruv belgisi bor")
+				return invalidf("comment contains a control character")
 			}
 		}
 	}

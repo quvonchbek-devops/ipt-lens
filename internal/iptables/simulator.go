@@ -12,21 +12,26 @@ const maxJumpDepth = 16
 type hook struct{ table, chain string }
 
 type simCtx struct {
-	state   *SystemState
-	src     string
-	dst     string
-	dstPort string
-	proto   string
-	inIf    string
-	outIf   string
-	ctState string
-	steps   []SimStep
+	state    *SystemState
+	src      string
+	dst      string
+	dstPort  string
+	proto    string
+	inIf     string
+	outIf    string
+	ctState  string
+	steps    []SimStep
+	warnings []string
 }
 
-// SimulatePacket - paket yo'lini Linux netfilter tartibida simulyatsiya qiladi:
-// nat/PREROUTING -> (lokal bo'lsa filter/INPUT) yoki (filter/FORWARD -> nat/POSTROUTING).
-// DNAT manzilni o'zgartiradi, shu sababli keyingi qoidalar yangi manzilda tekshiriladi.
-// Eslatma: OUTPUT zanjiri simulyatsiya qilinmaydi (paket manbasi lokal jarayon bo'lsa).
+// SimulatePacket walks a packet through the netfilter hooks in kernel order:
+// nat/PREROUTING, then filter/INPUT for local destinations, or filter/FORWARD
+// and nat/POSTROUTING otherwise. DNAT rewrites the destination, so later rules
+// see the new address. Locally generated traffic (OUTPUT) and the mangle and
+// raw tables are not simulated.
+//
+// Rules whose match conditions include options the simulator cannot evaluate
+// are assumed to match; the result is then marked Uncertain with a warning.
 func SimulatePacket(state *SystemState, req SimRequest) SimResult {
 	s := &simCtx{
 		state:   state,
@@ -47,10 +52,10 @@ func SimulatePacket(state *SystemState, req SimRequest) SimResult {
 	if !isBlocking(verdict) {
 		var path []hook
 		if s.isLocal(s.dst) {
-			s.info("Manzil lokal: paket INPUT zanjiriga yetkaziladi")
+			s.info("Destination is local: the packet is delivered to INPUT")
 			path = []hook{{"filter", "INPUT"}}
 		} else {
-			s.info("Manzil lokal emas: paket FORWARD va POSTROUTING orqali o'tadi")
+			s.info("Destination is not local: the packet goes through FORWARD and POSTROUTING")
 			path = []hook{{"filter", "FORWARD"}, {"nat", "POSTROUTING"}}
 		}
 		for _, h := range path {
@@ -65,7 +70,12 @@ func SimulatePacket(state *SystemState, req SimRequest) SimResult {
 	if s.dstPort != "" {
 		finalDst += ":" + s.dstPort
 	}
-	return SimResult{FinalVerdict: verdict, FinalDst: finalDst, Steps: s.steps}
+	warnings := s.warnings
+	if warnings == nil {
+		warnings = []string{}
+	}
+	return SimResult{FinalVerdict: verdict, FinalDst: finalDst, Steps: s.steps,
+		Uncertain: len(warnings) > 0, Warnings: warnings}
 }
 
 func isBlocking(v string) bool { return v == "DROP" || v == "REJECT" }
@@ -86,16 +96,16 @@ func (s *simCtx) runHook(table, chain string) string {
 	return s.evalChain(tbl, ch, 0)
 }
 
-// evalChain - zanjirdagi qoidalarni ketma-ket tekshiradi va hukm qaytaradi:
-// ACCEPT/DROP/REJECT (terminal) yoki RETURN (custom zanjir oxiri).
+// evalChain checks the chain's rules in order and returns a verdict:
+// ACCEPT/DROP/REJECT (terminal) or RETURN (end of a user-defined chain).
 func (s *simCtx) evalChain(tbl *Table, ch *Chain, depth int) string {
 	if depth > maxJumpDepth {
-		s.steps = append(s.steps, SimStep{Table: tbl.Name, Chain: ch.Name, Action: "ERROR", Note: "Jump chuqurligi chegaradan oshdi"})
+		s.steps = append(s.steps, SimStep{Table: tbl.Name, Chain: ch.Name, Action: "ERROR", Note: "Jump depth limit exceeded"})
 		return "RETURN"
 	}
 	s.steps = append(s.steps, SimStep{
 		Table: tbl.Name, Chain: ch.Name, Action: "ENTER_CHAIN",
-		Note: fmt.Sprintf("Zanjirga kirish (policy: %s)", ch.Policy),
+		Note: fmt.Sprintf("Entering chain (policy: %s)", ch.Policy),
 	})
 
 rules:
@@ -104,6 +114,11 @@ rules:
 			continue
 		}
 		step := SimStep{Table: tbl.Name, Chain: ch.Name, RuleID: r.ID, RawRule: r.RawRule, Note: r.Comment}
+		if len(r.Unsupported) > 0 {
+			s.warnings = append(s.warnings, fmt.Sprintf("%s/%s #%d uses %s, which the simulator cannot evaluate; it was assumed to match",
+				tbl.Name, ch.Name, r.ID, strings.Join(r.Unsupported, " ")))
+			step.Note = joinNote(step.Note, "assumed to match: "+strings.Join(r.Unsupported, " "))
+		}
 
 		switch r.Target {
 		case "ACCEPT", "DROP", "REJECT":
@@ -139,28 +154,28 @@ rules:
 				}
 				continue
 			}
-			// LOG, MARK va boshqa terminal bo'lmagan targetlar
+			// LOG, MARK and other non-terminating targets
 			step.Action = "MATCH -> " + r.Target
-			step.Note = joinNote(step.Note, "terminal emas, qoida davom etadi")
+			step.Note = joinNote(step.Note, "non-terminating, evaluation continues")
 			s.steps = append(s.steps, step)
 		}
 	}
 
 	if ch.IsCustom {
 		s.steps = append(s.steps, SimStep{Table: tbl.Name, Chain: ch.Name, Action: "RETURN",
-			Note: "Custom zanjir oxiri, chaqiruvchi zanjirga qaytish"})
+			Note: "End of user-defined chain, returning to the caller"})
 		return "RETURN"
 	}
 
 	s.steps = append(s.steps, SimStep{Table: tbl.Name, Chain: ch.Name,
-		Action: "DEFAULT_POLICY -> " + ch.Policy, Note: "Hech qaysi qoida mos kelmadi"})
+		Action: "DEFAULT_POLICY -> " + ch.Policy, Note: "No rule matched"})
 	if isBlocking(ch.Policy) {
 		return ch.Policy
 	}
 	return "ACCEPT"
 }
 
-// applyDNAT - --to-destination bo'yicha paket manzilini o'zgartiradi.
+// applyDNAT rewrites the packet destination from --to-destination.
 func (s *simCtx) applyDNAT(r *Rule) string {
 	if r.ToDest == "" {
 		return ""
@@ -181,7 +196,7 @@ func (s *simCtx) applyDNAT(r *Rule) string {
 	if s.dstPort != "" {
 		after += ":" + s.dstPort
 	}
-	return fmt.Sprintf("Manzil o'zgardi: %s → %s", before, after)
+	return fmt.Sprintf("Destination rewritten: %s → %s", before, after)
 }
 
 func (s *simCtx) matches(r *Rule) bool {
@@ -215,7 +230,7 @@ func (s *simCtx) matchDstType(rule string) bool {
 	if clean == "LOCAL" {
 		return s.isLocal(s.dst) != neg
 	}
-	// Boshqa turlar (UNICAST, BROADCAST...) simulyatsiya qilinmaydi: mos deb olinadi
+	// Other types (UNICAST, BROADCAST, ...) are not simulated and assumed to match.
 	return true
 }
 
@@ -235,7 +250,7 @@ func (s *simCtx) isLocal(ip string) bool {
 	return false
 }
 
-// matchIface/matchField: bo'sh qiymat (noma'lum) har doim mos deb olinadi.
+// matchIface: an empty value on either side (unknown) always matches.
 func matchIface(rule, req string) bool {
 	if rule == "" || req == "" {
 		return true

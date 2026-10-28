@@ -18,10 +18,10 @@ func TestChainOrderPreserved(t *testing.T) {
 	st := mustParse(t, MockIptablesData)
 	nat := st.Tables["nat"]
 	if nat == nil {
-		t.Fatal("nat jadvali topilmadi")
+		t.Fatal("nat table missing")
 	}
 	if len(nat.ChainOrder) == 0 || nat.ChainOrder[0] != "PREROUTING" {
-		t.Fatalf("zanjir tartibi noto'g'ri: %v", nat.ChainOrder)
+		t.Fatalf("wrong chain order: %v", nat.ChainOrder)
 	}
 }
 
@@ -30,10 +30,10 @@ func TestParseRuleFields(t *testing.T) {
 	nat := st.Tables["nat"]
 	dnat := nat.Chains["DOCKER"].Rules[0]
 	if dnat.Target != "DNAT" || dnat.ToDest != "172.18.0.4:5432" {
-		t.Fatalf("DNAT qoidasi noto'g'ri parse qilindi: target=%q to=%q", dnat.Target, dnat.ToDest)
+		t.Fatalf("DNAT rule parsed wrong: target=%q to=%q", dnat.Target, dnat.ToDest)
 	}
 	if dnat.InIface != "!docker0" {
-		t.Fatalf("negatsiya saqlanmadi: %q", dnat.InIface)
+		t.Fatalf("negation lost: %q", dnat.InIface)
 	}
 }
 
@@ -44,7 +44,7 @@ func TestSimulateAccept(t *testing.T) {
 		DstPort: "5432", InIface: "wg0", OutIface: "docker0",
 	})
 	if res.FinalVerdict != "ACCEPT" {
-		t.Fatalf("ACCEPT kutilgan edi, olindi: %s", res.FinalVerdict)
+		t.Fatalf("want ACCEPT, got %s", res.FinalVerdict)
 	}
 }
 
@@ -55,7 +55,7 @@ func TestSimulateDropMySQL(t *testing.T) {
 		DstPort: "3306", InIface: "eth0", OutIface: "docker0",
 	})
 	if res.FinalVerdict != "DROP" {
-		t.Fatalf("DROP kutilgan edi, olindi: %s", res.FinalVerdict)
+		t.Fatalf("want DROP, got %s", res.FinalVerdict)
 	}
 }
 
@@ -67,7 +67,7 @@ func TestValidateRule(t *testing.T) {
 	}
 	for _, g := range good {
 		if _, err := ValidateRule("filter", "DOCKER-USER", g); err != nil {
-			t.Errorf("to'g'ri qoida rad etildi %q: %v", g, err)
+			t.Errorf("valid rule rejected %q: %v", g, err)
 		}
 	}
 
@@ -80,11 +80,53 @@ func TestValidateRule(t *testing.T) {
 	}
 	for _, b := range bad {
 		if _, err := ValidateRule("filter", "DOCKER-USER", b); err == nil {
-			t.Errorf("noto'g'ri qoida qabul qilindi: %q", b)
+			t.Errorf("invalid rule accepted: %q", b)
 		}
 	}
 
 	if _, err := ValidateRule("foo", "DOCKER-USER", "-j ACCEPT"); err == nil {
-		t.Error("noto'g'ri jadval qabul qilindi")
+		t.Error("invalid table accepted")
+	}
+}
+
+func TestParseUnsupportedMatches(t *testing.T) {
+	_, r, err := parseRuleLine(`-A INPUT -m set --match-set bad src -m limit --limit 5/s -j DROP`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(r.Unsupported, " ") != "--match-set --limit" {
+		t.Fatalf("Unsupported = %q", r.Unsupported)
+	}
+
+	_, r, _ = parseRuleLine(`-A INPUT -p tcp -m tcp --dport 22 -m addrtype --dst-type LOCAL -j REJECT --reject-with icmp-port-unreachable`)
+	if len(r.Unsupported) != 0 {
+		t.Fatalf("target options or known matches reported as unsupported: %q", r.Unsupported)
+	}
+}
+
+func TestSimulateFlagsUnsupportedMatch(t *testing.T) {
+	st := mustParse(t, "*filter\n:INPUT ACCEPT [0:0]\n-A INPUT -m set --match-set bad src -j DROP\nCOMMIT\n")
+	res := SimulatePacket(st, SimRequest{SrcIP: "1.2.3.4", DstIP: "127.0.0.1", Proto: "tcp", DstPort: "22"})
+	if !res.Uncertain {
+		t.Fatal("verdict depends on --match-set but is not marked uncertain")
+	}
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "--match-set") {
+		t.Fatalf("Warnings = %q", res.Warnings)
+	}
+}
+
+func TestSimulateExactWhenFullySupported(t *testing.T) {
+	st := mustParse(t, MockIptablesData)
+	res := SimulatePacket(st, SimRequest{SrcIP: "1.2.3.4", DstIP: "172.18.0.4", Proto: "tcp", DstPort: "3306", InIface: "eth0", OutIface: "docker0"})
+	if res.Uncertain || len(res.Warnings) != 0 {
+		t.Fatalf("unexpected uncertainty: %q", res.Warnings)
+	}
+}
+
+func TestTokenizeEscapedQuotes(t *testing.T) {
+	toks := tokenizeRule(`-m comment --comment "say \"hi\" \\ ok" -j ACCEPT`)
+	want := []string{"-m", "comment", "--comment", `say "hi" \ ok`, "-j", "ACCEPT"}
+	if strings.Join(toks, "|") != strings.Join(want, "|") {
+		t.Fatalf("tokens = %q, want %q", toks, want)
 	}
 }

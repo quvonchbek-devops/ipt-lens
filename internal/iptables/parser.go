@@ -42,14 +42,15 @@ COMMIT
 COMMIT
 `
 
-// quietModules - Extra maydonida ko'rsatilmaydigan -m modullar (alohida maydonlarda ko'rsatiladi).
+// quietModules are -m modules whose options have their own Rule fields, so
+// they are not repeated in Extra.
 var quietModules = map[string]bool{
 	"tcp": true, "udp": true, "comment": true, "multiport": true,
-	"conntrack": true, "state": true,
+	"conntrack": true, "state": true, "addrtype": true,
 }
 
-// FetchState - real iptables-save natijasini yoki demo ma'lumotni qaytaradi.
-// Mock ma'lumot faqat demo rejimda ishlatiladi, jim fallback yo'q.
+// FetchState returns the live ruleset, or the sample data in demo mode.
+// There is no silent fallback to sample data.
 func FetchState(demo bool) (*SystemState, error) {
 	if demo {
 		st, err := ParseIptablesSave(strings.NewReader(MockIptablesData))
@@ -61,7 +62,7 @@ func FetchState(demo bool) (*SystemState, error) {
 	}
 	out, err := runSave()
 	if err != nil {
-		return nil, fmt.Errorf("iptables-save ishlamadi (root kerak, yoki --demo rejimda ishga tushiring): %w", err)
+		return nil, fmt.Errorf("iptables-save failed (run as root, or start with --demo): %w", err)
 	}
 	return ParseIptablesSave(bytes.NewReader(out))
 }
@@ -85,7 +86,7 @@ func (t *Table) addChain(c *Chain) {
 	t.Chains[c.Name] = c
 }
 
-// ParseIptablesSave - iptables-save chiqishini tahlil qiladi, zanjir tartibini saqlaydi.
+// ParseIptablesSave parses iptables-save output, keeping chain order.
 func ParseIptablesSave(r io.Reader) (*SystemState, error) {
 	state := newState()
 	scanner := bufio.NewScanner(r)
@@ -163,6 +164,7 @@ func parseRuleLine(line string) (string, *Rule, error) {
 	var chainName string
 	var extra []string
 	negate := false
+	afterJump := false // tokens after -j are target options, not matches
 
 	for i := 0; i < len(tokens); i++ {
 		tok := tokens[i]
@@ -175,7 +177,7 @@ func parseRuleLine(line string) (string, *Rule, error) {
 			prefix = "!"
 			negate = false
 		}
-		// Keyingi tokenni o'qish (i ni oldinga suradi)
+		// val consumes and returns the next token.
 		val := func() string {
 			if i+1 >= len(tokens) {
 				return ""
@@ -209,6 +211,7 @@ func parseRuleLine(line string) (string, *Rule, error) {
 			rule.ToDest = val()
 		case "-j", "--jump", "-g", "--goto":
 			rule.Target = val()
+			afterJump = true
 		case "--comment":
 			rule.Comment = val()
 		case "-m", "--match":
@@ -217,12 +220,15 @@ func parseRuleLine(line string) (string, *Rule, error) {
 			}
 		default:
 			extra = append(extra, prefix+tok)
+			if !afterJump && strings.HasPrefix(tok, "-") {
+				rule.Unsupported = append(rule.Unsupported, prefix+tok)
+			}
 		}
 	}
 
 	rule.Extra = strings.Join(extra, " ")
 	if chainName == "" {
-		return "", nil, fmt.Errorf("qatorda zanjir topilmadi")
+		return "", nil, fmt.Errorf("no chain in rule line")
 	}
 	return chainName, rule, nil
 }
@@ -237,13 +243,19 @@ func parseCounters(raw string) (uint64, uint64) {
 	return p, b
 }
 
-// tokenizeRule - qo'shtirnoqli qiymatlarni (masalan --comment "a b") bitta token qiladi.
+// tokenizeRule splits a rule into tokens. A double-quoted value (--comment "a b")
+// is one token; inside quotes, \" and \\ are unescaped as iptables-save writes them.
 func tokenizeRule(s string) []string {
 	var tokens []string
 	var cur strings.Builder
 	inQuotes := false
 	for i := 0; i < len(s); i++ {
 		ch := s[i]
+		if inQuotes && ch == '\\' && i+1 < len(s) && (s[i+1] == '"' || s[i+1] == '\\') {
+			i++
+			cur.WriteByte(s[i])
+			continue
+		}
 		if ch == '"' {
 			inQuotes = !inQuotes
 			continue
