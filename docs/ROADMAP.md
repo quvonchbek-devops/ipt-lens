@@ -22,6 +22,9 @@ unit and community docs. See [CHANGELOG.md](../CHANGELOG.md).
 - **Protect Docker's jump rules:** treat `FORWARD -j DOCKER-USER` and similar
   jumps that Docker manages as locked.
 - **Audit log:** an append-only record of every apply, confirm and rollback.
+- **Faster simple-view apply:** build each managed chain with one
+  `iptables-restore --noflush` call instead of one `iptables` call per rule
+  (policies are capped at 256 ports until then).
 
 ## Later
 

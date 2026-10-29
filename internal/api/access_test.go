@@ -114,7 +114,10 @@ func TestPinLensPort(t *testing.T) {
 			Ports: []iptables.PortAccess{{Port: 8090, Proto: "tcp", Level: iptables.LevelPublic}}}, iptables.LevelPublic},
 	}
 	for i, c := range cases {
-		got := pinLensPort(c.in, 8090)
+		got, err := pinLensPort(c.in, 8090)
+		if err != nil {
+			t.Fatalf("case %d: %v", i, err)
+		}
 		var lvl iptables.Level
 		for _, p := range got.Ports {
 			if p.Port == 8090 {
@@ -157,5 +160,23 @@ func TestAccessPreviewWarnsWhenVPNPortCloses(t *testing.T) {
 	_, p := preview(t, `{"vpn":{"ifaces":["wg0"],"subnets":[]},"default":"vpn","ports":[]}`)
 	if !strings.Contains(strings.Join(p.Warnings, "\n"), "WireGuard") {
 		t.Fatalf("warnings = %q", p.Warnings)
+	}
+}
+
+func TestPinLensPortNeedsVPNWhenEverythingClosed(t *testing.T) {
+	_, err := pinLensPort(iptables.AccessPolicy{Default: iptables.LevelClosed}, 8090)
+	if err == nil || !strings.Contains(err.Error(), "IPT-Lens") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestPreviewOrdersSamePortByProto(t *testing.T) {
+	next := iptables.AccessPolicy{Default: iptables.LevelPublic, Ports: []iptables.PortAccess{
+		{Port: 53, Proto: "udp", Level: iptables.LevelClosed}, {Port: 53, Proto: "tcp", Level: iptables.LevelClosed}}}
+	for i := 0; i < 20; i++ {
+		pv := previewOf(iptables.AccessPolicy{}, next, nil)
+		if len(pv.Changes) != 2 || !strings.HasPrefix(pv.Changes[0], "Port 53 (DNS)") || !strings.HasPrefix(pv.Changes[1], "Port 53/udp") {
+			t.Fatalf("changes = %q", pv.Changes)
+		}
 	}
 }

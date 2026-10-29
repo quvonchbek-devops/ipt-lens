@@ -46,7 +46,20 @@ const (
 	commentMeta  = "iptlens:v1"
 	commentDef   = "iptlens:default"
 	maxVPN       = 8
+	maxPorts     = 256 // each port is a few rules, applied one iptables call at a time
 )
+
+// internalIfaces carry traffic from containers, pods and VMs on this host;
+// filtering them would break Docker, Kubernetes CNIs and libvirt.
+var internalIfaces = []string{"docker0", "br-+", "cni0", "flannel.+", "cali+", "cilium_+", "lxc+", "virbr+"}
+
+func internalRules() [][]string {
+	out := make([][]string, len(internalIfaces))
+	for i, ifc := range internalIfaces {
+		out[i] = []string{"-i", ifc, "-j", "RETURN"}
+	}
+	return out
+}
 
 func validLevel(l Level) bool { return l == LevelPublic || l == LevelVPN || l == LevelClosed }
 
@@ -64,11 +77,19 @@ func (p AccessPolicy) Validate() error {
 		}
 	}
 	for _, s := range p.VPN.Subnets {
-		if _, _, err := net.ParseCIDR(s); err != nil {
-			if ip := net.ParseIP(s); ip == nil || ip.To4() == nil {
-				return invalidf("invalid VPN subnet: %q", s)
-			}
+		ip, _, err := net.ParseCIDR(s)
+		if err != nil {
+			ip = net.ParseIP(s)
 		}
+		if ip == nil {
+			return invalidf("invalid VPN subnet: %q", s)
+		}
+		if ip.To4() == nil {
+			return invalidf("VPN subnet %q is IPv6; only IPv4 is filtered", s)
+		}
+	}
+	if len(p.Ports) > maxPorts {
+		return invalidf("at most %d ports", maxPorts)
 	}
 	needsVPN := p.Default == LevelVPN
 	seen := map[string]bool{}
@@ -144,9 +165,8 @@ func inputRules(p AccessPolicy) [][]string {
 		{"-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "RETURN"},
 		{"-p", "icmp", "-j", "RETURN"},
 		{"-p", "udp", "--dport", "68", "-j", "RETURN"}, // DHCP client: losing the lease takes the host offline
-		{"-i", "docker0", "-j", "RETURN"},
-		{"-i", "br-+", "-j", "RETURN"},
 	}
+	rules = append(rules, internalRules()...)
 	for _, pa := range p.Ports {
 		match := []string{"-p", pa.Proto, "--dport", strconv.Itoa(pa.Port)}
 		rules = append(rules, p.levelRules(pa.Level, match, portNote(pa))...)
@@ -163,9 +183,8 @@ func inputRules(p AccessPolicy) [][]string {
 func dockerRules(p AccessPolicy) [][]string {
 	rules := [][]string{
 		cat([]string{"-m", "conntrack", "!", "--ctstate", "DNAT"}, comment(commentMeta), []string{"-j", "RETURN"}),
-		{"-i", "docker0", "-j", "RETURN"},
-		{"-i", "br-+", "-j", "RETURN"},
 	}
+	rules = append(rules, internalRules()...)
 	for _, pa := range p.Ports {
 		match := []string{"-p", pa.Proto, "-m", "conntrack", "--ctorigdstport", strconv.Itoa(pa.Port)}
 		rules = append(rules, p.levelRules(pa.Level, match, portNote(pa))...)
@@ -176,28 +195,27 @@ func dockerRules(p AccessPolicy) [][]string {
 	return rules
 }
 
-// activeChain returns the managed chain that parent jumps to, and the jump's
-// 1-based position, or "" if there is none.
-func activeChain(tbl *Table, parent, prefix string) (string, int) {
+// activeChain returns the managed chain that parent jumps to, or "".
+func activeChain(tbl *Table, parent, prefix string) string {
 	if tbl == nil {
-		return "", 0
+		return ""
 	}
 	ch, ok := tbl.Chains[parent]
 	if !ok {
-		return "", 0
+		return ""
 	}
 	for _, r := range ch.Rules {
 		if strings.HasPrefix(r.Target, prefix) {
-			return r.Target, r.ID
+			return r.Target
 		}
 	}
-	return "", 0
+	return ""
 }
 
 // ReadAccess reads the policy back from the active managed chain's comments.
 func ReadAccess(st *SystemState) (AccessPolicy, bool) {
 	tbl := st.Tables["filter"]
-	name, _ := activeChain(tbl, "INPUT", accessIn)
+	name := activeChain(tbl, "INPUT", accessIn)
 	if name == "" {
 		return AccessPolicy{}, false
 	}
@@ -265,7 +283,7 @@ func otherLetter(active, prefix string) string {
 // managed chain and switch the parent's jump to it, plus the commands that
 // remove the old chain after confirmation.
 func managedPlan(tbl *Table, parent, prefix string, rules [][]string) ([]step, [][]string, error) {
-	active, pos := activeChain(tbl, parent, prefix)
+	active := activeChain(tbl, parent, prefix)
 	next := otherLetter(active, prefix)
 	if _, exists := tbl.Chains[next]; exists {
 		// Left over from an interrupted cleanup and not referenced: remove it first.
@@ -284,19 +302,19 @@ func managedPlan(tbl *Table, parent, prefix string, rules [][]string) ([]step, [
 		}
 		steps = append(steps, s)
 	}
-	jump := cat(comment(commentJump), []string{"-j"})
+	// Switch by rule spec, never by position: another tool (fail2ban,
+	// kube-proxy) may insert into the parent chain during the confirm window.
+	jump := func(op, chain string) []string {
+		args := []string{"-t", "filter", op, parent}
+		if op == "-I" {
+			args = append(args, "1")
+		}
+		return cat(args, comment(commentJump), []string{"-j", chain})
+	}
+	steps = append(steps, step{do: jump("-I", next), undo: jump("-D", next)})
 	var cleanup [][]string
-	if active == "" {
-		steps = append(steps, step{
-			do:   cat([]string{"-t", "filter", "-I", parent, "1"}, jump, []string{next}),
-			undo: cat([]string{"-t", "filter", "-D", parent}, jump, []string{next}),
-		})
-	} else {
-		n := strconv.Itoa(pos)
-		steps = append(steps, step{
-			do:   cat([]string{"-t", "filter", "-R", parent, n}, jump, []string{next}),
-			undo: cat([]string{"-t", "filter", "-R", parent, n}, jump, []string{active}),
-		})
+	if active != "" {
+		steps = append(steps, step{do: jump("-D", active), undo: jump("-I", active)})
 		cleanup = [][]string{{"-t", "filter", "-F", active}, {"-t", "filter", "-X", active}}
 	}
 	return steps, cleanup, nil
@@ -321,22 +339,26 @@ func (w *Watchdog) ApplyAccess(p AccessPolicy) error {
 		if tbl == nil {
 			return plan{}, fmt.Errorf("filter table not found")
 		}
-		inSteps, inClean, err := managedPlan(tbl, "INPUT", accessIn, inputRules(p))
-		if err != nil {
+		pl := plan{desc: "access policy"}
+		var jumps []step
+		add := func(parent, prefix string, rules [][]string) error {
+			steps, clean, err := managedPlan(tbl, parent, prefix, rules)
+			if err != nil {
+				return err
+			}
+			chain := 1 + len(rules) // -N plus one step per rule; the rest switch jumps
+			pl.steps = append(pl.steps, steps[:chain]...)
+			jumps = append(jumps, steps[chain:]...)
+			pl.cleanup = append(pl.cleanup, clean...)
+			return nil
+		}
+		if err := add("INPUT", accessIn, inputRules(p)); err != nil {
 			return plan{}, err
 		}
-		pl := plan{desc: "access policy", cleanup: inClean}
-		var jumps []step
-		pl.steps = append(pl.steps, inSteps[:len(inSteps)-1]...)
-		jumps = append(jumps, inSteps[len(inSteps)-1])
 		if _, ok := tbl.Chains["DOCKER-USER"]; ok {
-			dkSteps, dkClean, err := managedPlan(tbl, "DOCKER-USER", accessDocker, dockerRules(p))
-			if err != nil {
+			if err := add("DOCKER-USER", accessDocker, dockerRules(p)); err != nil {
 				return plan{}, err
 			}
-			pl.steps = append(pl.steps, dkSteps[:len(dkSteps)-1]...)
-			jumps = append(jumps, dkSteps[len(dkSteps)-1])
-			pl.cleanup = append(pl.cleanup, dkClean...)
 		}
 		// Switch traffic only after every new chain is complete.
 		pl.steps = append(pl.steps, jumps...)
@@ -352,8 +374,7 @@ func DockerCoverage(st *SystemState) (hasChain, covered bool) {
 		return false, false
 	}
 	_, hasChain = tbl.Chains["DOCKER-USER"]
-	name, _ := activeChain(tbl, "DOCKER-USER", accessDocker)
-	return hasChain, name != ""
+	return hasChain, activeChain(tbl, "DOCKER-USER", accessDocker) != ""
 }
 
 // InputRules and DockerRules expose the generated chains for previews.

@@ -37,6 +37,12 @@ func TestAccessInputRules(t *testing.T) {
 		"-p udp --dport 68 -j RETURN",
 		"-i docker0 -j RETURN",
 		"-i br-+ -j RETURN",
+		"-i cni0 -j RETURN",
+		"-i flannel.+ -j RETURN",
+		"-i cali+ -j RETURN",
+		"-i cilium_+ -j RETURN",
+		"-i lxc+ -j RETURN",
+		"-i virbr+ -j RETURN",
 		"-p tcp --dport 22 -m comment --comment iptlens:port=22/tcp level=public -j RETURN",
 		"-i wg0 -p tcp --dport 5432 -m comment --comment iptlens:port=5432/tcp level=vpn -j RETURN",
 		"-p tcp --dport 5432 -m comment --comment iptlens:port=5432/tcp level=vpn -j DROP",
@@ -55,6 +61,12 @@ func TestAccessDockerRules(t *testing.T) {
 		"-m conntrack ! --ctstate DNAT -m comment --comment iptlens:v1 -j RETURN",
 		"-i docker0 -j RETURN",
 		"-i br-+ -j RETURN",
+		"-i cni0 -j RETURN",
+		"-i flannel.+ -j RETURN",
+		"-i cali+ -j RETURN",
+		"-i cilium_+ -j RETURN",
+		"-i lxc+ -j RETURN",
+		"-i virbr+ -j RETURN",
 		"-p tcp -m conntrack --ctorigdstport 22 -m comment --comment iptlens:port=22/tcp level=public -j RETURN",
 		"-i wg0 -p tcp -m conntrack --ctorigdstport 5432 -m comment --comment iptlens:port=5432/tcp level=vpn -j RETURN",
 		"-p tcp -m conntrack --ctorigdstport 5432 -m comment --comment iptlens:port=5432/tcp level=vpn -j DROP",
@@ -90,9 +102,15 @@ func TestAccessValidate(t *testing.T) {
 		"vpn level, no vpn": func(p *AccessPolicy) {
 			p.VPN = VPN{}
 		},
-		"bad iface":  func(p *AccessPolicy) { p.VPN.Ifaces = []string{"wg0;rm"} },
-		"bad subnet": func(p *AccessPolicy) { p.VPN.Subnets = []string{"10.0.0.0/33"} },
-		"too many":   func(p *AccessPolicy) { p.VPN.Ifaces = strings.Split("a,b,c,d,e,f,g,h,i", ",") },
+		"bad iface":   func(p *AccessPolicy) { p.VPN.Ifaces = []string{"wg0;rm"} },
+		"bad subnet":  func(p *AccessPolicy) { p.VPN.Subnets = []string{"10.0.0.0/33"} },
+		"too many":    func(p *AccessPolicy) { p.VPN.Ifaces = strings.Split("a,b,c,d,e,f,g,h,i", ",") },
+		"ipv6 subnet": func(p *AccessPolicy) { p.VPN.Subnets = []string{"fd7a:115c:a1e0::/48"} },
+		"too many ports": func(p *AccessPolicy) {
+			for i := 1000; i < 1300; i++ {
+				p.Ports = append(p.Ports, PortAccess{Port: i, Proto: "tcp", Level: LevelClosed})
+			}
+		},
 	}
 	if err := samplePolicy().Validate(); err != nil {
 		t.Fatalf("valid policy rejected: %v", err)
@@ -208,7 +226,8 @@ func TestApplyAccessSwapsAndCleansUpOnConfirm(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustContain(t, f.Calls(), "-t filter -N IPTLENS-IN-B")
-	mustContain(t, f.Calls(), "-t filter -R INPUT 1 -m comment --comment iptlens:jump -j IPTLENS-IN-B")
+	mustContain(t, f.Calls(), "-t filter -I INPUT 1 -m comment --comment iptlens:jump -j IPTLENS-IN-B")
+	mustContain(t, f.Calls(), "-t filter -D INPUT -m comment --comment iptlens:jump -j IPTLENS-IN-A")
 	if _, err := w.Confirm(); err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +254,13 @@ func TestApplyAccessRollbackRestoresOldChain(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	calls := f.Calls()
-	mustContain(t, calls, "-t filter -R INPUT 1 -m comment --comment iptlens:jump -j IPTLENS-IN-A")
+	mustContain(t, calls, "-t filter -I INPUT 1 -m comment --comment iptlens:jump -j IPTLENS-IN-A")
+	mustContain(t, calls, "-t filter -D INPUT -m comment --comment iptlens:jump -j IPTLENS-IN-B")
+	for _, c := range calls {
+		if strings.Contains(c, " -R ") {
+			t.Fatalf("position-based replace %q can overwrite another tool's rule", c)
+		}
+	}
 	if last := calls[len(calls)-1]; last != "-t filter -X IPTLENS-IN-B" {
 		t.Fatalf("last rollback call = %q, want the new chain deleted", last)
 	}
@@ -271,5 +296,14 @@ func TestAccessSubnetOnlyWithoutInterface(t *testing.T) {
 	got := strings.Join(joinRules(inputRules(p)), "\n")
 	if !strings.Contains(got, "-s 100.64.0.0/10 -p tcp --dport 5432") {
 		t.Fatalf("subnet not used when it is the only VPN identity:\n%s", got)
+	}
+}
+
+func TestApplyRefusesManagedChain(t *testing.T) {
+	installFake(t)
+	w := newTestWatchdog(t, time.Hour)
+	err := w.Apply(ApplyRequest{Table: "filter", Chain: "IPTLENS-IN-A", Position: 1, Rule: "-j ACCEPT"})
+	if !errors.Is(err, ErrProtected) || !strings.Contains(err.Error(), "IPT-Lens") {
+		t.Fatalf("got %v", err)
 	}
 }

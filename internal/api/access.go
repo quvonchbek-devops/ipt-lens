@@ -30,6 +30,7 @@ type accessView struct {
 	Rows          []accessRow           `json:"rows"`
 	VPNCandidates []enricher.VPNIface   `json:"vpn_candidates"`
 	Notes         []string              `json:"notes"`
+	dockerNotes   []string              // also shown as warnings in a preview
 }
 
 type accessPreview struct {
@@ -111,8 +112,9 @@ func (s *Server) buildView(st *iptables.SystemState, d discovery) accessView {
 		row(s.LensPort, "tcp").Locked = true
 	}
 	hasChain, covered := iptables.DockerCoverage(st)
-	notes := append([]string{ipv6Note}, dockerNotes(hasChain, covered || !configured, len(d.published))...)
-	v := accessView{Configured: configured, Policy: cur, VPNCandidates: d.vpn, Notes: notes}
+	dn := dockerNotes(hasChain, covered || !configured, len(d.published))
+	v := accessView{Configured: configured, Policy: cur, VPNCandidates: d.vpn,
+		Notes: append([]string{ipv6Note}, dn...), dockerNotes: dn}
 	if v.VPNCandidates == nil {
 		v.VPNCandidates = []enricher.VPNIface{}
 	}
@@ -143,24 +145,35 @@ func (s *Server) handleAccess(w http.ResponseWriter, r *http.Request) {
 
 // pinLensPort keeps IPT-Lens' own port reachable at least over the VPN, so a
 // policy cannot cut off the panel used to fix it.
-func pinLensPort(p iptables.AccessPolicy, port int) iptables.AccessPolicy {
+func pinLensPort(p iptables.AccessPolicy, port int) (iptables.AccessPolicy, error) {
 	if port == 0 {
-		return p
+		return p, nil
 	}
 	out := p
 	out.Ports = append([]iptables.PortAccess(nil), p.Ports...)
+	idx := -1
 	for i, pa := range out.Ports {
 		if pa.Port == port && pa.Proto == "tcp" {
-			if pa.Level == iptables.LevelClosed {
-				out.Ports[i].Level = iptables.LevelVPN
-			}
-			return out
+			idx = i
 		}
 	}
-	if p.Default == iptables.LevelClosed {
+	level := p.Default
+	if idx >= 0 {
+		level = out.Ports[idx].Level
+	}
+	if level != iptables.LevelClosed {
+		return out, nil
+	}
+	if len(p.VPN.Ifaces)+len(p.VPN.Subnets) == 0 {
+		return out, fmt.Errorf("%w: IPT-Lens itself listens on port %d and would become unreachable. "+
+			"Choose your VPN first, so the panel stays reachable over it", iptables.ErrInvalid, port)
+	}
+	if idx >= 0 {
+		out.Ports[idx].Level = iptables.LevelVPN
+	} else {
 		out.Ports = append(out.Ports, iptables.PortAccess{Port: port, Proto: "tcp", Level: iptables.LevelVPN})
 	}
-	return out
+	return out, nil
 }
 
 func (s *Server) handleAccessPreview(w http.ResponseWriter, r *http.Request) {
@@ -168,8 +181,11 @@ func (s *Server) handleAccessPreview(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &next) {
 		return
 	}
-	next = pinLensPort(next, s.LensPort)
-	if err := next.Validate(); err != nil {
+	next, err := pinLensPort(next, s.LensPort)
+	if err == nil {
+		err = next.Validate()
+	}
+	if err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -180,7 +196,7 @@ func (s *Server) handleAccessPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	view := s.buildView(st, s.discover())
 	pv := previewOf(view.Policy, next, view.Rows)
-	pv.Warnings = append(pv.Warnings, view.Notes[1:]...) // Docker coverage notes; the IPv6 note is already there
+	pv.Warnings = append(pv.Warnings, view.dockerNotes...)
 	writeJSON(w, http.StatusOK, pv)
 }
 
@@ -189,7 +205,11 @@ func (s *Server) handleAccessApply(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &next) {
 		return
 	}
-	if err := s.Watch.ApplyAccess(pinLensPort(next, s.LensPort)); err != nil {
+	next, err := pinLensPort(next, s.LensPort)
+	if err == nil {
+		err = s.Watch.ApplyAccess(next)
+	}
+	if err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -248,7 +268,12 @@ func previewOf(cur, next iptables.AccessPolicy, rows []accessRow) accessPreview 
 	for k := range keys {
 		sorted = append(sorted, k)
 	}
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].port < sorted[j].port })
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].port != sorted[j].port {
+			return sorted[i].port < sorted[j].port
+		}
+		return sorted[i].proto < sorted[j].proto
+	})
 	for _, k := range sorted {
 		from, _ := levelOf(cur, k.port, k.proto)
 		to, _ := levelOf(next, k.port, k.proto)

@@ -59,8 +59,11 @@
     let n = 0;
     if (vpnText(base) !== vpnText(draft)) n++;
     if (base.default !== draft.default) n++;
+    // A row that just follows "Everything else" is covered by the default's change.
     allRows().forEach((r) => {
-      if (levelIn(base, r.port, r.proto).level !== levelIn(draft, r.port, r.proto).level) n++;
+      const a = levelIn(base, r.port, r.proto);
+      const b = levelIn(draft, r.port, r.proto);
+      if ((a.explicit || b.explicit) && a.level !== b.level) n++;
     });
     return n;
   }
@@ -318,8 +321,12 @@
           if (picker && !picker.apply()) { L.toast("Choose a VPN interface or enter its subnet.", "error"); return; }
           draft.default = "vpn";
           checks.forEach(({ r, input }) => {
-            draft.ports = draft.ports.filter((p) => !(p.port === r.port && p.proto === r.proto));
-            if (input.checked) draft.ports.push({ port: r.port, proto: r.proto, level: "public" });
+            const cur = levelIn(draft, r.port, r.proto);
+            if (input.checked) setLevel(r.port, r.proto, "public");
+            // Unchecked ports follow the new default, except ones already closed to everyone.
+            else if (!(cur.explicit && cur.level === "closed")) {
+              draft.ports = draft.ports.filter((p) => !(p.port === r.port && p.proto === r.proto));
+            }
           });
           L.closeModal();
           render();

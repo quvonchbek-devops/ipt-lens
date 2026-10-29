@@ -281,6 +281,9 @@ func (w *Watchdog) Apply(req ApplyRequest) error {
 	if protectedName(req.Chain) {
 		return ErrProtected
 	}
+	if strings.HasPrefix(req.Chain, accessPrefix) {
+		return fmt.Errorf("%w: %s belongs to IPT-Lens' simple view; change it there", ErrProtected, req.Chain)
+	}
 	if req.Position < 0 || req.Position > 1000 {
 		return invalidf("position must be between 0 and 1000")
 	}
