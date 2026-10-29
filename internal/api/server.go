@@ -25,6 +25,7 @@ type Server struct {
 	AllowedHosts []string
 	Watch        *iptables.Watchdog
 	Static       http.Handler
+	TokenHint    string // where to find the token, sent with 401 responses
 }
 
 func (s *Server) Routes() http.Handler {
@@ -88,7 +89,7 @@ func (s *Server) guard(method string, h http.HandlerFunc) http.Handler {
 		if s.Token != "" {
 			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 			if subtle.ConstantTimeCompare([]byte(got), []byte(s.Token)) != 1 {
-				writeJSON(w, http.StatusUnauthorized, errBody("missing or invalid token"))
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing or invalid token", "hint": s.TokenHint})
 				return
 			}
 		}
@@ -100,7 +101,8 @@ func (s *Server) guard(method string, h http.HandlerFunc) http.Handler {
 // sameOrigin reports whether the request comes from the UI's own origin (or
 // from a non-browser client). "same-site" is rejected too: another port on
 // the same host is same-site but a different application. Behind a reverse
-// proxy the Origin carries the public name, so an allowed host also counts.
+// proxy the Origin carries the public name, so an allowed non-loopback host
+// also counts; a loopback origin must match exactly (other ports are other apps).
 func (s *Server) sameOrigin(r *http.Request) bool {
 	switch r.Header.Get("Sec-Fetch-Site") {
 	case "", "same-origin", "none":
@@ -115,7 +117,18 @@ func (s *Server) sameOrigin(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	return strings.EqualFold(u.Host, r.Host) || (len(s.AllowedHosts) > 0 && s.hostAllowed(u.Host))
+	if strings.EqualFold(u.Host, r.Host) {
+		return true
+	}
+	return len(s.AllowedHosts) > 0 && !isLoopbackName(u.Hostname()) && s.hostAllowed(u.Host)
+}
+
+func isLoopbackName(h string) bool {
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
 }
 
 // isJSON requires application/json. Browsers send it cross-origin only after

@@ -125,6 +125,9 @@ the flag, the UI tells you that a confirmed change lasts only until reboot.
    never confirmed, so it is rolled back. After a reboot it is discarded, since
    the kernel ruleset was rebuilt.
 
+If a rollback itself fails, `pending.json` is kept and new changes are refused.
+Check the rules by hand, then delete `<state-dir>/pending.json`.
+
 Only one change can be pending at a time.
 
 ## HTTP API

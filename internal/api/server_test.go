@@ -166,9 +166,8 @@ func TestHealthz(t *testing.T) {
 }
 
 func TestOriginFromAllowedHostBehindProxy(t *testing.T) {
-	h := newTestServer(t, "")
 	w, _ := iptables.NewWatchdog(t.TempDir(), true, time.Minute)
-	h = (&Server{Demo: true, Watch: w, Static: http.NotFoundHandler(),
+	h := (&Server{Demo: true, Watch: w, Static: http.NotFoundHandler(),
 		AllowedHosts: []string{"localhost", "127.0.0.1", "fw.example.com"}}).Routes()
 	body := `{"dst_ip":"127.0.0.1"}`
 	rec := do(t, h, http.MethodPost, "/api/v1/simulate", body,
@@ -179,5 +178,24 @@ func TestOriginFromAllowedHostBehindProxy(t *testing.T) {
 	rec = do(t, h, http.MethodPost, "/api/v1/simulate", body, withHeader("Origin", "https://evil.example"))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("foreign origin: code = %d, want 403", rec.Code)
+	}
+}
+
+func TestOriginFromOtherLocalPortRejected(t *testing.T) {
+	h := newTestServer(t, "")
+	rec := do(t, h, http.MethodPost, "/api/v1/simulate", `{"dst_ip":"127.0.0.1"}`,
+		withHeader("Origin", "http://127.0.0.1:3000"))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("code = %d, want 403", rec.Code)
+	}
+}
+
+func TestUnauthorizedCarriesTokenHint(t *testing.T) {
+	w, _ := iptables.NewWatchdog(t.TempDir(), true, time.Minute)
+	h := (&Server{Demo: true, Token: testToken, TokenHint: "sudo cat /srv/x/token", Watch: w,
+		Static: http.NotFoundHandler()}).Routes()
+	rec := do(t, h, http.MethodGet, "/api/v1/state", "")
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "/srv/x/token") {
+		t.Fatalf("code = %d body = %s", rec.Code, rec.Body)
 	}
 }

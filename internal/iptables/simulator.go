@@ -114,15 +114,11 @@ rules:
 			continue
 		}
 		step := SimStep{Table: tbl.Name, Chain: ch.Name, RuleID: r.ID, RawRule: r.RawRule, Note: r.Comment}
-		if len(unchecked) > 0 && decisive(tbl, r) {
+		if len(unchecked) > 0 && decisive(r) {
 			conds := strings.Join(unchecked, " ")
 			step.Note = joinNote(step.Note, "assumed to match: "+conds)
-			if !s.warned[r] {
-				s.warned[r] = true
-				s.warnings = append(s.warnings, fmt.Sprintf(
-					"%s/%s #%d uses %s, which the simulator cannot evaluate; it was assumed to match",
-					tbl.Name, ch.Name, r.ID, conds))
-			}
+			s.warn(r, fmt.Sprintf("%s/%s #%d uses %s, which the simulator cannot evaluate; it was assumed to match",
+				tbl.Name, ch.Name, r.ID, conds))
 		}
 
 		switch r.Target {
@@ -159,9 +155,14 @@ rules:
 				}
 				continue
 			}
-			// LOG, MARK and other non-terminating targets
 			step.Action = "MATCH -> " + r.Target
-			step.Note = joinNote(step.Note, "non-terminating, evaluation continues")
+			if nonTerminating[r.Target] {
+				step.Note = joinNote(step.Note, "non-terminating, evaluation continues")
+			} else {
+				step.Note = joinNote(step.Note, "target not simulated; evaluation continues as if it did not stop the packet")
+				s.warn(r, fmt.Sprintf("%s/%s #%d jumps to %s, which the simulator does not model; the packet may stop there",
+					tbl.Name, ch.Name, r.ID, r.Target))
+			}
 			s.steps = append(s.steps, step)
 		}
 	}
@@ -206,13 +207,23 @@ func (s *simCtx) applyDNAT(r *Rule) string {
 
 // decisive reports whether r's target can change the verdict (a terminating
 // target or a jump). Guessing the match of a LOG or MARK rule does not matter.
-func decisive(tbl *Table, r *Rule) bool {
-	switch r.Target {
-	case "ACCEPT", "DROP", "REJECT", "RETURN", "DNAT", "REDIRECT", "SNAT", "MASQUERADE":
-		return true
+func decisive(r *Rule) bool { return !nonTerminating[r.Target] }
+
+// nonTerminating targets let evaluation continue with the next rule. Any other
+// target that is neither simulated nor a chain may decide the packet's fate.
+var nonTerminating = map[string]bool{
+	"LOG": true, "NFLOG": true, "ULOG": true, "TRACE": true, "AUDIT": true,
+	"MARK": true, "CONNMARK": true, "SECMARK": true, "CONNSECMARK": true,
+	"CLASSIFY": true, "DSCP": true, "TOS": true, "TTL": true, "HL": true,
+	"TCPMSS": true, "CT": true, "CHECKSUM": true, "LED": true, "IDLETIMER": true, "SET": true,
+}
+
+// warn records one warning per rule, however often the rule is reached.
+func (s *simCtx) warn(r *Rule, msg string) {
+	if !s.warned[r] {
+		s.warned[r] = true
+		s.warnings = append(s.warnings, msg)
 	}
-	_, jump := tbl.Chains[r.Target]
-	return jump
 }
 
 // assumed lists rule conditions the request leaves unspecified; they match by

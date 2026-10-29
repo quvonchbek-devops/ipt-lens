@@ -365,3 +365,87 @@ func privateDir(t *testing.T) string {
 	}
 	return d
 }
+
+func TestRecoverKeepsRecordWhenRollbackFails(t *testing.T) {
+	f := installFake(t)
+	f.failOn = "-D INPUT"
+	dir := privateDir(t)
+	pending := `{"desc":"x","undo":[["-t","filter","-D","INPUT","-j","ACCEPT"]]}`
+	if err := os.WriteFile(filepath.Join(dir, "pending.json"), []byte(pending), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w, err := NewWatchdog(dir, false, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(w.pendingPath()); err != nil {
+		t.Fatal("record removed although the rollback failed")
+	}
+	if err := w.begin(twoStepPlan); !errors.Is(err, ErrPending) {
+		t.Fatalf("new change accepted over an unresolved rollback: %v", err)
+	}
+}
+
+func TestRecoverKeepsRefusedRecord(t *testing.T) {
+	installFake(t)
+	dir := privateDir(t)
+	pending := `{"desc":"tampered","undo":[["-F"]]}`
+	if err := os.WriteFile(filepath.Join(dir, "pending.json"), []byte(pending), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewWatchdog(dir, false, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "pending.json")); err != nil {
+		t.Fatal("refused record was deleted instead of left for the operator")
+	}
+}
+
+func TestExpireKeepsRecordWhenRollbackFails(t *testing.T) {
+	f := installFake(t)
+	w := newTestWatchdog(t, 20*time.Millisecond)
+	if err := w.begin(twoStepPlan); err != nil {
+		t.Fatal(err)
+	}
+	f.failOn = "-D INPUT"
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if pending, _ := w.Status(); !pending {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("never expired")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, err := os.Stat(w.pendingPath()); err != nil {
+		t.Fatal("record removed although the timed rollback failed")
+	}
+}
+
+func TestPersistFollowsSymlinkChain(t *testing.T) {
+	installFake(t)
+	dir := privateDir(t)
+	final := filepath.Join(dir, "rules-final")
+	mid := filepath.Join(dir, "rules.current")
+	link := filepath.Join(dir, "rules.v4")
+	if err := os.Symlink(final, mid); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(mid, link); err != nil {
+		t.Fatal(err)
+	}
+	w := newTestWatchdog(t, time.Hour, WithPersistFile(link))
+	if err := w.begin(twoStepPlan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Confirm(); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Lstat(mid); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("intermediate symlink was replaced")
+	}
+	if _, err := os.Stat(final); err != nil {
+		t.Fatal("final target not written")
+	}
+}

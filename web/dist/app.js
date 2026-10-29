@@ -145,7 +145,7 @@
   });
 
   /* ---------- token (401) ---------- */
-  function askToken() {
+  function askToken(hint) {
     if (tokenPromise) return tokenPromise;
     tokenPromise = new Promise((resolve) => {
       const inp = el("input", "mono");
@@ -155,7 +155,7 @@
       const done = (val) => { tokenPromise = null; resolve(val); };
       openModal({
         title: "API token",
-        sub: "The token is in IPTLENS_TOKEN, or run: sudo cat /var/lib/ipt-lens/token",
+        sub: hint || "Ask the server administrator for the API token.",
         body: [inp, el("p", "hint", "It is kept only for this browser session.")],
         onCancel: () => done(null),
         actions: [
@@ -187,7 +187,9 @@
     }
 
     if (res.status === 401 && !retried) {
-      const t = await askToken();
+      let hint = "";
+      try { hint = (await res.json()).hint || ""; } catch { /* no JSON body */ }
+      const t = await askToken(hint);
       if (!t) throw new Error("No token entered");
       return api(path, opts, true);
     }

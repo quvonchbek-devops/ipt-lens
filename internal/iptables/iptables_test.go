@@ -201,3 +201,11 @@ func TestStripManaged(t *testing.T) {
 		t.Fatalf("stripManaged:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+func TestSimulateFlagsUnsimulatedTarget(t *testing.T) {
+	st := mustParse(t, "*filter\n:INPUT ACCEPT [0:0]\n-A INPUT -m set --match-set bad src -j NFQUEUE --queue-num 0\nCOMMIT\n")
+	res := SimulatePacket(st, SimRequest{SrcIP: "1.2.3.4", DstIP: "127.0.0.1", Proto: "tcp", DstPort: "22"})
+	if !res.Uncertain {
+		t.Fatal("NFQUEUE verdict presented as certain")
+	}
+}

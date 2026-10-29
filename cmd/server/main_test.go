@@ -65,3 +65,24 @@ func TestLoadOrCreateToken(t *testing.T) {
 		t.Fatalf("second call: %q, %v, %v (want %q, false)", again, created, err, tok)
 	}
 }
+
+func TestLoadOrCreateTokenRefusesReadableFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "token"), []byte("0123456789abcdef0123\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := loadOrCreateToken(dir); err == nil {
+		t.Fatal("accepted a token file readable by others")
+	}
+}
+
+func TestLoadOrCreateTokenReportsReadErrors(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "token"), 0o700); err != nil { // unreadable as a file
+		t.Fatal(err)
+	}
+	_, _, err := loadOrCreateToken(dir)
+	if err == nil || strings.Contains(err.Error(), "file exists") {
+		t.Fatalf("misleading or missing error: %v", err)
+	}
+}

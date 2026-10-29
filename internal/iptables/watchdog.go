@@ -106,30 +106,35 @@ func checkPrivateDir(dir string) error {
 // recover rolls back a change left unconfirmed by a crash or restart. A record
 // from an earlier boot is discarded: the kernel ruleset was rebuilt since.
 func (w *Watchdog) recover() {
+	// The record is removed only when it is settled. A record that cannot be
+	// read, is refused or fails to roll back stays, and blocks new changes
+	// until an operator checks the rules and removes it.
 	data, err := os.ReadFile(w.pendingPath())
 	if err != nil {
 		return
 	}
-	defer os.Remove(w.pendingPath())
 	var c change
 	if err := json.Unmarshal(data, &c); err != nil {
-		log.Printf("ignoring unreadable %s: %v", w.pendingPath(), err)
+		log.Printf("cannot read %s, leaving it for an operator: %v", w.pendingPath(), err)
 		return
 	}
 	if c.BootID != "" && c.BootID != bootID() {
 		log.Printf("unconfirmed change (%s) predates the last reboot; not replaying its undo", c.Desc)
+		_ = os.Remove(w.pendingPath())
 		return
 	}
 	for _, cmd := range c.Undo {
 		if !safeUndo(cmd) {
-			log.Printf("refusing unexpected undo command in %s: %q", w.pendingPath(), cmd)
+			log.Printf("refusing unexpected undo command in %s, leaving it for an operator: %q", w.pendingPath(), cmd)
 			return
 		}
 	}
 	log.Printf("found unconfirmed change (%s), rolling it back", c.Desc)
 	if err := runUndo(c.Undo); err != nil {
-		log.Printf("rollback error: %v", err)
+		log.Printf("rollback error, leaving %s for an operator: %v", w.pendingPath(), err)
+		return
 	}
+	_ = os.Remove(w.pendingPath())
 }
 
 // safeUndo accepts only the shapes this package writes:
@@ -295,10 +300,12 @@ func (w *Watchdog) expire(c *change) {
 		return
 	}
 	log.Printf("not confirmed in time, rolling back: %s", c.Desc)
-	if err := runUndo(c.Undo); err != nil {
-		log.Printf("rollback error: %v", err)
-	}
 	w.pending = nil
+	if err := runUndo(c.Undo); err != nil {
+		// Keep pending.json: it records what may still be applied, and blocks new changes.
+		log.Printf("rollback error, leaving %s for an operator: %v", w.pendingPath(), err)
+		return
+	}
 	_ = os.Remove(w.pendingPath())
 }
 
@@ -332,14 +339,27 @@ func (w *Watchdog) persist() error {
 	if err != nil {
 		return err
 	}
-	path := w.persistFile
-	if target, err := os.Readlink(path); err == nil {
+	path, err := resolveLinks(w.persistFile)
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(path, stripManaged(rules), 0o600)
+}
+
+// resolveLinks follows a chain of symlinks to the final path, which need not
+// exist yet (filepath.EvalSymlinks fails on a dangling link).
+func resolveLinks(path string) (string, error) {
+	for i := 0; i < 40; i++ {
+		target, err := os.Readlink(path)
+		if err != nil {
+			return path, nil // not a symlink (or missing): write here
+		}
 		if !filepath.IsAbs(target) {
 			target = filepath.Join(filepath.Dir(path), target)
 		}
 		path = target
 	}
-	return writeFileAtomic(path, stripManaged(rules), 0o600)
+	return "", fmt.Errorf("too many levels of symlinks at %s", path)
 }
 
 // stripManaged drops managed chains, their rules and jumps into them from

@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -47,6 +48,15 @@ func main() {
 	if !isLoopback(*listen) && token == "" && !*demo {
 		log.Fatal("IPTLENS_TOKEN is required when listening on a non-loopback address")
 	}
+
+	// NewWatchdog creates the state directory and checks that it is private.
+	watch, err := iptables.NewWatchdog(*stateDir, *demo, *timeout,
+		iptables.WithKeepBackups(*keepBackups), iptables.WithPersistFile(*persistFile))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	tokenHint := "Set in IPTLENS_TOKEN on the server."
 	if token == "" && !*demo {
 		// Loopback is reachable by every local user and by SSRF in local apps,
 		// so a token is always required outside demo mode.
@@ -55,16 +65,11 @@ func main() {
 			log.Fatal(err)
 		}
 		token = t
+		tokenPath := filepath.Join(*stateDir, "token")
+		tokenHint = "On the server, run: sudo cat " + tokenPath
 		if created {
-			log.Printf("generated an API token in %s (read it with: sudo cat %s)",
-				filepath.Join(*stateDir, "token"), filepath.Join(*stateDir, "token"))
+			log.Printf("generated an API token in %s", tokenPath)
 		}
-	}
-
-	watch, err := iptables.NewWatchdog(*stateDir, *demo, *timeout,
-		iptables.WithKeepBackups(*keepBackups), iptables.WithPersistFile(*persistFile))
-	if err != nil {
-		log.Fatal(err)
 	}
 
 	static, err := fs.Sub(web.Dist, "dist")
@@ -84,6 +89,7 @@ func main() {
 		AllowedHosts: hosts,
 		Watch:        watch,
 		Static:       http.FileServer(http.FS(static)),
+		TokenHint:    tokenHint,
 	}
 
 	httpSrv := &http.Server{
@@ -141,32 +147,63 @@ func displayVersion(v string) string {
 
 // loadOrCreateToken returns the token stored in dir/token, creating a random
 // one (mode 0600) on first use. created reports whether it was just made.
+// An existing file must be a regular file that only its owner can read.
 func loadOrCreateToken(dir string) (token string, created bool, err error) {
 	path := filepath.Join(dir, "token")
-	if b, err := os.ReadFile(path); err == nil {
+	b, err := readPrivateFile(path)
+	switch {
+	case err == nil:
 		t := strings.TrimSpace(string(b))
 		if len(t) < 16 {
-			return "", false, fmt.Errorf("token in %s is shorter than 16 characters", path)
+			return "", false, fmt.Errorf("token in %s is shorter than 16 characters; fix or delete it", path)
 		}
 		return t, false, nil
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	case !errors.Is(err, fs.ErrNotExist):
 		return "", false, err
 	}
+
 	buf := make([]byte, 24)
 	if _, err := rand.Read(buf); err != nil {
 		return "", false, err
 	}
 	t := hex.EncodeToString(buf)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	// Write a complete temp file, then hard-link it into place: the token file
+	// either does not exist or is complete, and an existing one is never replaced.
+	tmp, err := os.CreateTemp(dir, ".token.tmp-*")
 	if err != nil {
 		return "", false, err
 	}
-	if _, err := f.WriteString(t + "\n"); err != nil {
-		f.Close()
+	defer os.Remove(tmp.Name())
+	_, err = tmp.WriteString(t + "\n")
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
 		return "", false, err
 	}
-	return t, true, f.Close()
+	if err := os.Link(tmp.Name(), path); err != nil {
+		return "", false, err
+	}
+	return t, true, nil
+}
+
+// readPrivateFile reads path if it is a regular file without group or other
+// permission bits.
+func readPrivateFile(path string) ([]byte, error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	if fi.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("%s is readable by group or others (mode %v); run: chmod 600 %s", path, fi.Mode().Perm(), path)
+	}
+	return os.ReadFile(path)
 }
 
 func isLoopback(addr string) bool {

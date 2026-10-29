@@ -63,16 +63,20 @@ First public release.
   is now discarded when the boot ID differs.
 - `pending.json` was trusted blindly. The state directory must now be private,
   and recorded undo commands are checked before they run.
-- If a rollback after a failed step also failed, its record was lost and the
-  next change could overwrite it. The record now stays and blocks new changes.
+- When a rollback failed (after a failed step, on timeout, or on restart), its
+  record was deleted, so nothing showed that a change might still be applied
+  and the next change could proceed. The record now stays in the state
+  directory and blocks new changes until an operator checks the rules and
+  removes it.
 - `--persist-file` saved Docker and Kubernetes chains, whose stale copies broke
   container networking at boot, and replaced a symlinked file instead of
   writing its target.
 - Behind a reverse proxy, every browser POST was rejected because the Origin
   (public name) did not match the Host header.
 - The simulator presented guesses as exact when the request left out a field a
-  rule checks (protocol, port, address, interface), and warned about LOG and
-  other rules that cannot change the verdict.
+  rule checks (protocol, port, address, interface), treated targets it does not
+  model (NFQUEUE, TPROXY, ...) as harmless, and warned about LOG and other rules
+  that cannot change the verdict.
 - The confirm message claimed the rule was saved permanently even though
   nothing was written to disk.
 - Tertiary text in the UI did not meet WCAG AA contrast.
