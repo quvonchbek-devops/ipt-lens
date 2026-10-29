@@ -23,7 +23,8 @@ First public release.
   switches between system, light and dark, remembered per browser. Colors are
   semantic tokens with both themes checked against WCAG AA.
 - Colors encode exposure in the simple view: amber for *Everyone*, blue for
-  *VPN only*, neutral with a lock for *Nobody*, plus an icon per level. Red is
+  *VPN only*, neutral with a lock for *Nobody*, plus an icon per level; the
+  selected level is a solid, bright fill in both themes. Red is
   kept for errors and destructive actions, green for success. Unapplied edits
   are violet. The review separates warnings from informational notes.
 - The simple view filters IPv6 too, through `ip6tables` when present, in the

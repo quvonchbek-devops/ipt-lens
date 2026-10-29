@@ -20,16 +20,18 @@
   --on-primary: #110f0a;
 
   /* status */
-  --ok: #71d6a3;
-  --warn: #f9ba5f;  --on-warn: #201301;
-  --bad: #fb817f;   --on-bad: #1d0c0b;
-  --info: #80bdfb;
-  --custom: #beb1e9;  /* user-defined chains, jumps */
-  --docker: #71d0d5;
+  --ok: #53e39c;
+  --warn: #f9ac46;  --on-warn: #201301;
+  --bad: #fd7273;   --on-bad: #1d0c0b;
+  --info: #6baffa;
+  --custom: #baa3fe;  /* user-defined chains, jumps */
+  --docker: #4ddae9;
 
   /* who can reach a port: exposure, not good/bad */
-  --closed-fg: #ececef;
-  --closed-bg: #353538;
+  /* selected level: solid fills, the brightest color on the page */
+  --fill-public: #fcaa2b; --on-fill-public: #211201; --fill-public-line: #fcaa2b;
+  --fill-vpn: #156cdd;    --on-fill-vpn: #fcfcfc;
+  --fill-closed: #4c4c51; --on-fill-closed: #f8f8f8;
 
   --shadow: 0 6px 14px rgba(0,0,0,.4);
   --shadow-lg: 0 16px 28px rgba(0,0,0,.5);
@@ -37,17 +39,15 @@
   color-scheme: dark;
 
   /* derived roles: one definition, both themes */
-  --ok-bg: color-mix(in srgb, var(--ok) 13%, transparent);     --ok-line: color-mix(in srgb, var(--ok) 38%, transparent);
-  --warn-bg: color-mix(in srgb, var(--warn) 13%, transparent); --warn-line: color-mix(in srgb, var(--warn) 38%, transparent);
-  --bad-bg: color-mix(in srgb, var(--bad) 13%, transparent);   --bad-line: color-mix(in srgb, var(--bad) 38%, transparent);
-  --info-bg: color-mix(in srgb, var(--info) 13%, transparent); --info-line: color-mix(in srgb, var(--info) 38%, transparent);
+  --ok-bg: color-mix(in srgb, var(--ok) 16%, transparent);     --ok-line: color-mix(in srgb, var(--ok) 45%, transparent);
+  --warn-bg: color-mix(in srgb, var(--warn) 16%, transparent); --warn-line: color-mix(in srgb, var(--warn) 45%, transparent);
+  --bad-bg: color-mix(in srgb, var(--bad) 16%, transparent);   --bad-line: color-mix(in srgb, var(--bad) 45%, transparent);
+  --info-bg: color-mix(in srgb, var(--info) 16%, transparent); --info-line: color-mix(in srgb, var(--info) 45%, transparent);
   --custom-bg: color-mix(in srgb, var(--custom) 13%, transparent); --custom-line: color-mix(in srgb, var(--custom) 34%, transparent);
   --docker-bg: color-mix(in srgb, var(--docker) 12%, transparent); --docker-line: color-mix(in srgb, var(--docker) 32%, transparent);
   --vpn: var(--info); --vpn-bg: var(--info-bg); --vpn-line: var(--info-line);
   --iface: var(--t2); --iface-bg: color-mix(in srgb, var(--t2) 10%, transparent); --iface-line: color-mix(in srgb, var(--t2) 28%, transparent);
   --edit: var(--custom); --edit-line: var(--custom-line); /* edited, not applied yet */
-  --lvl-public: var(--warn); --lvl-public-bg: var(--warn-bg);
-  --lvl-vpn: var(--info);    --lvl-vpn-bg: var(--info-bg);
   --focus: color-mix(in srgb, var(--primary) 55%, transparent);
 
   --sans: "Geist", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -72,15 +72,16 @@
     --primary-h: #36363d;
     --on-primary: #fcfaf6;
 
-    --ok: #006d45;
-    --warn: #904c00;  --on-warn: #fcfcfc;
-    --bad: #be222a;   --on-bad: #fcfcfc;
-    --info: #1762b6;
-    --custom: #6953a0;
-    --docker: #006877;
+    --ok: #0b6b42;
+    --warn: #884f0f;  --on-warn: #fcfcfc;
+    --bad: #b31124;   --on-bad: #fcfcfc;
+    --info: #195daa;
+    --custom: #6d3ac3;
+    --docker: #096770;
 
-    --closed-fg: #1a1a1f;
-    --closed-bg: #dddde1;
+    --fill-public: #fcaa2b; --on-fill-public: #211201; --fill-public-line: #b66c18;
+    --fill-vpn: #156cdd;    --on-fill-vpn: #fcfcfc;
+    --fill-closed: #35353a; --on-fill-closed: #f8f8f8;
 
     --shadow: 0 6px 14px rgba(30,28,24,.12);
     --shadow-lg: 0 16px 28px rgba(30,28,24,.18);
@@ -104,15 +105,16 @@
   --primary-h: #36363d;
   --on-primary: #fcfaf6;
 
-  --ok: #006d45;
-  --warn: #904c00;  --on-warn: #fcfcfc;
-  --bad: #be222a;   --on-bad: #fcfcfc;
-  --info: #1762b6;
-  --custom: #6953a0;
-  --docker: #006877;
+  --ok: #0b6b42;
+  --warn: #884f0f;  --on-warn: #fcfcfc;
+  --bad: #b31124;   --on-bad: #fcfcfc;
+  --info: #195daa;
+  --custom: #6d3ac3;
+  --docker: #096770;
 
-  --closed-fg: #1a1a1f;
-  --closed-bg: #dddde1;
+  --fill-public: #fcaa2b; --on-fill-public: #211201; --fill-public-line: #b66c18;
+  --fill-vpn: #156cdd;    --on-fill-vpn: #fcfcfc;
+  --fill-closed: #35353a; --on-fill-closed: #f8f8f8;
 
   --shadow: 0 6px 14px rgba(30,28,24,.12);
   --shadow-lg: 0 16px 28px rgba(30,28,24,.18);
@@ -483,9 +485,10 @@ tbody td:nth-child(2) { white-space: nowrap; }
 }
 .s-lvl:hover:not(:disabled) { color: var(--t1); }
 .s-lvl:disabled { opacity: .4; cursor: not-allowed; }
-.s-lvl-public[aria-pressed="true"] { color: var(--lvl-public); background: var(--lvl-public-bg); }
-.s-lvl-vpn[aria-pressed="true"] { color: var(--lvl-vpn); background: var(--lvl-vpn-bg); }
-.s-lvl-closed[aria-pressed="true"] { color: var(--closed-fg); background: var(--closed-bg); }
+.s-lvl[aria-pressed="true"] { font-weight: 600; }
+.s-lvl-public[aria-pressed="true"] { color: var(--on-fill-public); background: var(--fill-public); box-shadow: inset 0 0 0 1px var(--fill-public-line); }
+.s-lvl-vpn[aria-pressed="true"] { color: var(--on-fill-vpn); background: var(--fill-vpn); }
+.s-lvl-closed[aria-pressed="true"] { color: var(--on-fill-closed); background: var(--fill-closed); }
 
 .s-notes { max-width: 72ch; }
 
