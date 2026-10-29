@@ -54,16 +54,34 @@ func protectedName(n string) bool {
 var dockerBridge = regexp.MustCompile(`^(docker0|br-[0-9a-f]{12})$`)
 
 // isProtected reports whether the rule belongs to Docker, Kubernetes, Calico,
-// libvirt or ufw: its chain or target is theirs or, where Docker manages the
-// table (docker: it holds Docker's DOCKER chain), it is Docker's jump into
-// DOCKER-USER or one of Docker's bridge rules. Docker re-creates those on
-// start; without Docker managing the table, the same rules were written by
-// hand and must stay editable and persisted.
+// libvirt or ufw, so the UI shows it locked: its chain or target is theirs or,
+// where Docker manages the table (docker: it holds Docker's DOCKER chain), it
+// has the exact shape of Docker's jump into DOCKER-USER or of a bridge rule.
+// Without Docker managing the table, the same rules were written by hand and
+// stay editable.
 func isProtected(chain string, r *Rule, docker bool) bool {
-	if protectedName(chain) || protectedName(r.Target) {
-		return true
-	}
-	return docker && (r.Target == "DOCKER-USER" || dockerBridgeRule(chain, r))
+	return ownedByName(chain, r) || docker && (dockerUserJump(chain, r) || dockerBridgeRule(chain, r))
+}
+
+// ownedByName reports whether the rule's chain or target is another tool's.
+// Only these are left out of --persist-file (see stripManaged).
+func ownedByName(chain string, r *Rule) bool {
+	return protectedName(chain) || protectedName(r.Target)
+}
+
+// dockerUserJump matches Docker's own "-A FORWARD -j DOCKER-USER", with no
+// conditions; a conditional jump was written by hand.
+func dockerUserJump(chain string, r *Rule) bool {
+	return chain == "FORWARD" && r.Target == "DOCKER-USER" && plainRule(r) && r.InIface == "" && r.OutIface == "" &&
+		r.CtState == "" && (r.Source == "" || r.Source == "0.0.0.0/0" || r.Source == "::/0")
+}
+
+// plainRule reports whether a rule has no protocol, ports, destination,
+// address type, comment or other match.
+func plainRule(r *Rule) bool {
+	anyAddr := r.Destination == "" || r.Destination == "0.0.0.0/0" || r.Destination == "::/0"
+	return (r.Proto == "" || r.Proto == "all") && r.SrcPort == "" && r.DstPort == "" && anyAddr &&
+		r.DstType == "" && r.Comment == "" && r.Extra == "" && len(r.Unsupported) == 0
 }
 
 // dockerBridgeRule matches only the exact rules Docker writes for a bridge B:
@@ -77,8 +95,7 @@ func isProtected(chain string, r *Rule, docker bool) bool {
 // comment or match) was written by hand.
 func dockerBridgeRule(chain string, r *Rule) bool {
 	anyAddr := func(a string) bool { return a == "" || a == "0.0.0.0/0" || a == "::/0" }
-	if (r.Proto != "" && r.Proto != "all") || r.SrcPort != "" || r.DstPort != "" || !anyAddr(r.Destination) ||
-		r.DstType != "" || r.Comment != "" || r.Extra != "" || len(r.Unsupported) > 0 {
+	if !plainRule(r) {
 		return false
 	}
 	in, out := r.InIface, r.OutIface

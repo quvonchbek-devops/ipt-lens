@@ -115,8 +115,8 @@ iptables rules live in the kernel and are lost on reboot. Pass
 `--persist-file /etc/iptables/rules.v4` (and `--persist-file6
 /etc/iptables/rules.v6` for IPv6) and IPT-Lens saves the ruleset there each
 time you confirm a change. Chains and rules that Docker, Kubernetes, Calico,
-libvirt or ufw manage (including Docker's jump into `DOCKER-USER` and its
-bridge rules; your own rules in `DOCKER-USER` are kept) are left out, since those tools rebuild them and restoring stale copies at
+libvirt or ufw manage (by chain name; your own rules, including those in
+`DOCKER-USER`, are kept) are left out, since those tools rebuild them and restoring stale copies at
 boot breaks container networking. If the path is a symlink, its target is written. Pair it with a loader such as
 `iptables-persistent` (Debian/Ubuntu) or `iptables-services` (RHEL family). Without
 the flag, the UI tells you that a confirmed change lasts only until reboot.

@@ -205,14 +205,28 @@ func TestBridgeRulesKeptWithoutDocker(t *testing.T) {
 	}
 }
 
+func TestStripManagedKeepsLookAlikes(t *testing.T) {
+	// Locked in the UI where Docker manages the table, but always persisted:
+	// losing a hand-written DROP of the same shape would open the host.
+	in := "*filter\n:FORWARD DROP [0:0]\n:DOCKER - [0:0]\n:DOCKER-USER - [0:0]\n" +
+		"-A FORWARD -i eth0 -j DOCKER-USER\n-A FORWARD -i docker0 -o docker0 -j DROP\nCOMMIT\n"
+	want := "*filter\n:FORWARD DROP [0:0]\n:DOCKER-USER - [0:0]\n" +
+		"-A FORWARD -i eth0 -j DOCKER-USER\n-A FORWARD -i docker0 -o docker0 -j DROP\nCOMMIT\n"
+	if got := string(stripManaged([]byte(in))); got != want {
+		t.Fatalf("stripManaged:\n%s\nwant:\n%s", got, want)
+	}
+	st := mustParse(t, in)
+	if st.Tables["filter"].Chains["FORWARD"].Rules[0].Protected {
+		t.Fatal("a conditional jump into DOCKER-USER was written by hand but is locked")
+	}
+}
+
 func TestStripManaged(t *testing.T) {
 	in := "*filter\n:INPUT DROP [0:0]\n:DOCKER - [0:0]\n:DOCKER-USER - [0:0]\n" +
 		"-A INPUT -p tcp --dport 22 -j ACCEPT\n-A FORWARD -j DOCKER-USER\n-A FORWARD -o docker0 -j DOCKER\n" +
 		"-A DOCKER -d 172.18.0.4/32 -j ACCEPT\n-A DOCKER-USER -j RETURN\nCOMMIT\n"
-	// Docker re-creates its jump into DOCKER-USER on start; the chain and the
-	// administrator's rules in it are kept.
 	want := "*filter\n:INPUT DROP [0:0]\n:DOCKER-USER - [0:0]\n" +
-		"-A INPUT -p tcp --dport 22 -j ACCEPT\n" +
+		"-A INPUT -p tcp --dport 22 -j ACCEPT\n-A FORWARD -j DOCKER-USER\n" +
 		"-A DOCKER-USER -j RETURN\nCOMMIT\n"
 	if got := string(stripManaged([]byte(in))); got != want {
 		t.Fatalf("stripManaged:\n%s\nwant:\n%s", got, want)

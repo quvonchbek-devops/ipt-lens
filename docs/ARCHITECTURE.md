@@ -93,14 +93,17 @@ shows them locked. For Docker that is the chains it creates (`DOCKER`,
 `DOCKER-FORWARD`, `DOCKER-BRIDGE`, `DOCKER-CT`, `DOCKER-INTERNAL`,
 `DOCKER-INGRESS`, `DOCKER-ISOLATION-*`; not `DOCKER-USER` or chains you name
 `DOCKER-something`) and rules jumping into them. Where Docker manages a table
-(it holds Docker's `DOCKER` chain), the `-j DOCKER-USER` jump and the exact
-bridge rules Docker writes for `docker0` and `br-<id>` are locked too:
+(it holds Docker's `DOCKER` chain), the plain `FORWARD -j DOCKER-USER` jump and
+the exact bridge rules Docker writes for `docker0` and `br-<id>` are locked too:
 `FORWARD -o B --ctstate RELATED,ESTABLISHED -j ACCEPT`, `FORWARD -i B ! -o B
 -j ACCEPT`, `FORWARD -i B -o B -j ACCEPT|DROP` and `POSTROUTING -s <subnet>
 ! -o B -j MASQUERADE`. Anything else on a bridge, and all of these on a host
-where Docker does not manage iptables, counts as written by hand. The same
-test decides what `--persist-file` leaves out, since Docker writes these again
-when it starts.
+where Docker does not manage iptables, counts as written by hand.
+`--persist-file` leaves out only what is recognised by chain name (Docker's
+chains and jumps into them, and the other tools' chains). The jump and bridge
+rules above are locked in the UI but still saved: a hand-written rule can have
+the same shape, and dropping a DROP would leave the host open after a reboot,
+while restoring a copy of Docker's own rule is harmless.
 
 ## Frontend
 
