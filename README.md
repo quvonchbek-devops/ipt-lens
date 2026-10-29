@@ -6,7 +6,10 @@
 A small web panel for reading and safely changing **iptables** on a Linux server.
 One static Go binary, no dependencies, no database.
 
-![IPT-Lens simple view: each port with Everyone, VPN only or Nobody](docs/images/simple.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/simple-dark.png">
+  <img alt="IPT-Lens simple view: each port with Everyone, VPN only or Nobody" src="docs/images/simple-light.png">
+</picture>
 
 ## Why
 
@@ -22,7 +25,9 @@ confirm it**. If you lose access and cannot confirm, the change rolls itself bac
   **VPN only** or **Nobody**, plus one setting for every other port. Quick tasks
   cover the common jobs: *lock the server behind the VPN*, *open a port*,
   *close a container port*. Every change is shown in plain sentences before it
-  is applied. You never write an iptables rule.
+  is applied. You never write an iptables rule. Colors show exposure, not
+  "good" or "bad": amber is open to the internet, blue is VPN only, grey with a
+  lock is closed; each level also has its own icon.
 - **Readable ruleset (Advanced view).** ([screenshot](docs/images/advanced.png)) All four tables, chains in kernel order, packet and byte
   counters, interface and Docker container names next to addresses.
 - **Packet simulator.** Enter source, destination, interfaces, protocol and port;

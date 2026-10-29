@@ -15,6 +15,13 @@
   };
   // Pre-checked in "Lock the server": SSH, web, and VPN endpoints (which must
   // stay reachable from the internet, or the VPN itself goes down).
+  // Shape as well as color tells the levels apart: open globe, shield, lock.
+  const icon = (d) => `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+  const LEVEL_ICON = {
+    public: icon('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>'),
+    vpn: icon('<path d="M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6Z"/>'),
+    closed: icon('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'),
+  };
   const PUBLIC_BY_DEFAULT = new Set(["22/tcp", "80/tcp", "443/tcp", "51820/udp", "41641/udp", "1194/udp"]);
 
   let view = null; // last GET /api/v1/access
@@ -107,7 +114,9 @@
     group.setAttribute("role", "group");
     group.setAttribute("aria-label", opts.label || `Who can reach port ${port}`);
     LEVELS.forEach((lvl) => {
-      const b = L.el("button", `s-lvl s-lvl-${lvl}`, LABEL[lvl]);
+      const b = L.el("button", `s-lvl s-lvl-${lvl}`);
+      b.innerHTML = LEVEL_ICON[lvl];
+      b.append(LABEL[lvl]);
       b.type = "button";
       b.setAttribute("aria-pressed", String(current === lvl));
       let why = "";
@@ -229,7 +238,10 @@
     const list = L.el("ul", "s-changes");
     pv.changes.forEach((c) => list.append(L.el("li", "", c)));
     const body = [list];
-    pv.warnings.forEach((w) => body.push(L.el("div", "warn-note s-warn", w)));
+    // Warnings are about risk to this server; notes are context. Keep them apart
+    // so a warning still stands out.
+    pv.warnings.forEach((w) => body.push(L.el("div", "s-warn", w)));
+    (pv.notes || []).forEach((n) => body.push(L.el("div", "s-note", n)));
     const det = L.el("details", "s-cmds");
     det.append(L.el("summary", "", "Show iptables commands"), L.el("pre", "code-block mono", pv.commands.join("\n")));
     body.push(det, L.el("p", "hint", "The change is temporary until you confirm it in the yellow bar. If you lose access, it rolls back on its own."));

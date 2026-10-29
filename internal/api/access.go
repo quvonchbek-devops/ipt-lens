@@ -37,6 +37,7 @@ type accessView struct {
 type accessPreview struct {
 	Changes  []string `json:"changes"`
 	Warnings []string `json:"warnings"`
+	Notes    []string `json:"notes"`
 	Commands []string `json:"commands"`
 }
 
@@ -250,7 +251,7 @@ func rowLabel(port int, proto, name string) string {
 // previewOf describes the change from cur to next in plain sentences, with
 // warnings and the iptables commands that implement next.
 func previewOf(cur, next iptables.AccessPolicy, rows []accessRow, ipv6 bool) accessPreview {
-	pv := accessPreview{Changes: []string{}, Warnings: []string{}}
+	pv := accessPreview{Changes: []string{}, Warnings: []string{}, Notes: []string{}}
 	vpnText := func(v iptables.VPN) string {
 		parts := append(append([]string{}, v.Ifaces...), v.Subnets...)
 		if len(parts) == 0 {
@@ -318,14 +319,14 @@ func previewOf(cur, next iptables.AccessPolicy, rows []accessRow, ipv6 bool) acc
 		pv.Warnings = append(pv.Warnings, "With only a subnet, IPT-Lens trusts the packet's source address, "+
 			"which can be spoofed from the internet. Choose your VPN interface if you can.")
 	}
-	pv.Warnings = append(pv.Warnings, "Traffic from containers, pods and VMs on this host is always allowed, "+
+	pv.Notes = append(pv.Notes, "Traffic from containers, pods and VMs on this host is always allowed, "+
 		"through these interfaces: "+strings.Join(iptables.InternalIfaces(), ", ")+
 		". If a bridge named br-* connects to an outside network, filter it in the Advanced view.")
 	if ipv6 && len(next.VPN.Ifaces) == 0 && usesVPN(next) {
 		pv.Warnings = append(pv.Warnings, "Over IPv6, \"VPN only\" needs a VPN interface. With only a subnet, "+
 			"those ports are closed to everyone over IPv6.")
 	}
-	pv.Warnings = append(pv.Warnings, ipv6Notes(ipv6, true, true)) // describes the state after applying
+	pv.Notes = append(pv.Notes, ipv6Notes(ipv6, true, true)) // describes the state after applying
 	families := []bool{false}
 	if ipv6 {
 		families = append(families, true)

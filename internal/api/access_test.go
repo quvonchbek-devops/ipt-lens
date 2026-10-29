@@ -183,9 +183,20 @@ func TestPreviewOrdersSamePortByProto(t *testing.T) {
 
 func TestAccessPreviewNamesTrustedInterfaces(t *testing.T) {
 	_, p := preview(t, `{"vpn":{"ifaces":["wg0"],"subnets":[]},"default":"vpn","ports":[]}`)
-	all := strings.Join(p.Warnings, "\n")
+	all := strings.Join(p.Notes, "\n")
 	if !strings.Contains(all, "docker0") || !strings.Contains(all, "br-*") {
-		t.Fatalf("warnings do not name the always-allowed interfaces: %q", p.Warnings)
+		t.Fatalf("notes do not name the always-allowed interfaces: %q", p.Notes)
+	}
+}
+
+func TestAccessPreviewSeparatesNotesFromWarnings(t *testing.T) {
+	// Nothing risky: only informational notes, so real warnings stand out when they appear.
+	_, p := preview(t, `{"vpn":{"ifaces":["wg0"],"subnets":[]},"default":"public","ports":[{"port":3306,"proto":"tcp","level":"closed"}]}`)
+	if len(p.Warnings) != 0 {
+		t.Fatalf("warnings for a harmless change: %q", p.Warnings)
+	}
+	if !strings.Contains(strings.Join(p.Notes, "\n"), "IPv6") {
+		t.Fatalf("notes = %q", p.Notes)
 	}
 }
 

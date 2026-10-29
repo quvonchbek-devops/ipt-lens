@@ -19,6 +19,13 @@ First public release.
   plain sentences, with the iptables commands folded away, and go through the
   usual confirm-or-rollback flow. The previous UI is the *Advanced* view.
 - `GET /api/v1/access`, `POST /api/v1/access/preview`, `POST /api/v1/access/apply`.
+- Light theme. The UI follows the system setting; a button in the top bar
+  switches between system, light and dark, remembered per browser. Colors are
+  semantic tokens with both themes checked against WCAG AA.
+- Colors encode exposure in the simple view: amber for *Everyone*, blue for
+  *VPN only*, neutral with a lock for *Nobody*, plus an icon per level. Red is
+  kept for errors and destructive actions, green for success. Unapplied edits
+  are violet. The review separates warnings from informational notes.
 - The simple view filters IPv6 too, through `ip6tables` when present, in the
   same confirm-or-rollback step as IPv4. ICMPv6 and the DHCPv6 client stay
   allowed. `--persist-file6` saves the IPv6 ruleset; backups include it.

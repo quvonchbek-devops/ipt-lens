@@ -245,7 +245,7 @@
 
   function actionPill(t, to) {
     const label = ACT_LABEL[t] || t;
-    const cls = t === "ACCEPT" ? "tg-ok" : (t === "DROP" || t === "REJECT") ? "tg-bad" : "tg-warn";
+    const cls = t === "ACCEPT" ? "tg-ok" : (t === "DROP" || t === "REJECT") ? "tg-bad" : "tg-jump";
     return `<span class="tg ${cls}" title="iptables: -j ${esc(t)}">${esc(label)}</span>${to ? `<div class="sub mono">${esc(to)}</div>` : ""}`;
   }
 
@@ -341,7 +341,7 @@
 
   function setTable(t) {
     activeTable = t;
-    document.querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.table === t));
+    document.querySelectorAll("#table-nav .seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.table === t));
     lastSig = "";
     render();
   }
@@ -568,7 +568,7 @@
     else openDelete(d);
   });
 
-  document.querySelectorAll(".seg-btn").forEach((btn) => {
+  document.querySelectorAll("#table-nav .seg-btn").forEach((btn) => {
     btn.addEventListener("click", () => setTable(btn.dataset.table));
   });
 
@@ -595,6 +595,26 @@
     lastSig = "";
     refresh();
   });
+
+  /* ---------- theme: system → light → dark ---------- */
+  const THEME_KEY = "iptlens_theme";
+  const THEME_ICON = {
+    system: svg('<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>'),
+    light: svg('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'),
+    dark: svg('<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/>'),
+  };
+  function applyTheme(t) {
+    if (t === "system") delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = t;
+    try { if (t === "system") localStorage.removeItem(THEME_KEY); else localStorage.setItem(THEME_KEY, t); } catch { /* storage unavailable */ }
+    const b = $("btn-theme");
+    b.innerHTML = THEME_ICON[t];
+    b.title = `Theme: ${t} (click to change)`;
+    b.setAttribute("aria-label", `Theme: ${t}. Change theme`);
+  }
+  const NEXT_THEME = { system: "light", light: "dark", dark: "system" };
+  $("btn-theme").addEventListener("click", () => applyTheme(NEXT_THEME[document.documentElement.dataset.theme || "system"]));
+  applyTheme(document.documentElement.dataset.theme || "system");
 
   // Shared with simple.js
   window.IPTLens = { api, toast, openModal, closeModal, dismissModal, el, esc, refresh: () => { lastSig = ""; return refresh(); } };
