@@ -8,6 +8,8 @@ Wants=network-online.target
 Type=simple
 EnvironmentFile=-/etc/ipt-lens/env
 ExecStart=/usr/local/bin/ipt-lens $IPTLENS_ARGS
+# iptables opens /run/xtables.lock; create it so it can be the only writable path in /run.
+ExecStartPre=+/usr/bin/touch /run/xtables.lock
 Restart=on-failure
 RestartSec=2
 
@@ -19,8 +21,8 @@ NoNewPrivileges=yes
 StateDirectory=ipt-lens
 StateDirectoryMode=0700
 ProtectSystem=strict
-# iptables takes /run/xtables.lock; --persist-file usually points into /etc/iptables.
-ReadWritePaths=/run -/etc/iptables
+# --persist-file usually points into /etc/iptables.
+ReadWritePaths=/run/xtables.lock -/etc/iptables
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes

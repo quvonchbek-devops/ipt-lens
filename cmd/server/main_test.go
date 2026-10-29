@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -15,6 +17,7 @@ func TestHostAllowlist(t *testing.T) {
 		{"0.0.0.0:8090", "", "<nil>"},
 		{":8090", "", "<nil>"},
 		{"0.0.0.0:8090", "fw.example.com, ", "localhost,127.0.0.1,::1,fw.example.com"},
+		{"0.0.0.0:8090", "fw.example.com:8443,[fe80::1]", "localhost,127.0.0.1,::1,fw.example.com,fe80::1"},
 	}
 	for _, c := range cases {
 		got := hostAllowlist(c.listen, c.extra)
@@ -44,5 +47,21 @@ func TestIsLoopback(t *testing.T) {
 		if got := isLoopback(addr); got != want {
 			t.Errorf("isLoopback(%q) = %v, want %v", addr, got, want)
 		}
+	}
+}
+
+func TestLoadOrCreateToken(t *testing.T) {
+	dir := t.TempDir()
+	tok, created, err := loadOrCreateToken(dir)
+	if err != nil || !created || len(tok) < 32 {
+		t.Fatalf("first call: %q, %v, %v", tok, created, err)
+	}
+	info, err := os.Stat(filepath.Join(dir, "token"))
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("token file mode: %v, %v", info, err)
+	}
+	again, created, err := loadOrCreateToken(dir)
+	if err != nil || created || again != tok {
+		t.Fatalf("second call: %q, %v, %v (want %q, false)", again, created, err, tok)
 	}
 }

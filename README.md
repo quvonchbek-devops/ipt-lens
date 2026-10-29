@@ -60,7 +60,7 @@ Run it with systemd:
 ```sh
 sudo install -D -m 0644 deploy/ipt-lens.service /etc/systemd/system/ipt-lens.service
 sudo install -D -m 0600 deploy/ipt-lens.env.example /etc/ipt-lens/env
-sudoedit /etc/ipt-lens/env          # set IPTLENS_TOKEN and IPTLENS_ARGS
+sudoedit /etc/ipt-lens/env          # set IPTLENS_ARGS (and IPTLENS_TOKEN, optional)
 sudo systemctl daemon-reload
 sudo systemctl enable --now ipt-lens
 ```
@@ -74,15 +74,25 @@ IPT-Lens controls your firewall. **Do not expose it to the internet.** Good opti
 - Bind it to a VPN address such as WireGuard (`--listen 10.8.0.1:8090`) and allow
   that port only on the VPN interface.
 
-A token (`IPTLENS_TOKEN`, at least 16 characters) is required whenever the listen
-address is not loopback. Generate one with `openssl rand -hex 24`. The UI asks for
-it once and keeps it for the browser session only.
+The API always needs a token outside demo mode, even on loopback: every local user
+and any app on the host with an SSRF bug can reach `127.0.0.1`. Set
+`IPTLENS_TOKEN` (at least 16 characters, e.g. `openssl rand -hex 24`), or let
+IPT-Lens generate one on first start in `<state-dir>/token` (mode 0600):
+
+```sh
+sudo cat /var/lib/ipt-lens/token
+```
+
+On a non-loopback address, `IPTLENS_TOKEN` must be set explicitly. The UI asks for
+the token once and keeps it for the browser session only.
 
 ### Keeping changes after a reboot
 
 iptables rules live in the kernel and are lost on reboot. Pass
-`--persist-file /etc/iptables/rules.v4` and IPT-Lens saves the full ruleset there
-each time you confirm a change. Pair it with a loader such as
+`--persist-file /etc/iptables/rules.v4` and IPT-Lens saves the ruleset there each
+time you confirm a change. Chains that Docker, Kubernetes, Calico, libvirt or ufw
+manage are left out, since those tools rebuild them and restoring stale copies at
+boot breaks container networking. If the path is a symlink, its target is written. Pair it with a loader such as
 `iptables-persistent` (Debian/Ubuntu) or `iptables-services` (RHEL family). Without
 the flag, the UI tells you that a confirmed change lasts only until reboot.
 
@@ -101,7 +111,7 @@ the flag, the UI tells you that a confirmed change lasts only until reboot.
 
 | Environment | Meaning |
 |---|---|
-| `IPTLENS_TOKEN` | Bearer token for the API. Required on non-loopback addresses |
+| `IPTLENS_TOKEN` | Bearer token for the API. Required on non-loopback addresses; otherwise generated in `<state-dir>/token` if unset |
 
 ## How a change works
 
@@ -111,15 +121,16 @@ the flag, the UI tells you that a confirmed change lasts only until reboot.
 4. The change is applied. If a step fails, the steps already applied are undone.
 5. A timer starts. **Confirm** keeps the change, and saves it to `--persist-file`
    if one is set. If the timer runs out, the undo runs.
-6. On start, a leftover `pending.json` means the last change was never confirmed,
-   so it is rolled back.
+6. On start, a leftover `pending.json` from the same boot means the last change was
+   never confirmed, so it is rolled back. After a reboot it is discarded, since
+   the kernel ruleset was rebuilt.
 
 Only one change can be pending at a time.
 
 ## HTTP API
 
 All endpoints are under `/api/v1`, take and return JSON, and need
-`Authorization: Bearer <token>` when a token is set. POST requests must use
+`Authorization: Bearer <token>` (demo mode on loopback needs none). POST requests must use
 `Content-Type: application/json`. Cross-site requests are refused.
 
 | Method | Path | Body | Purpose |

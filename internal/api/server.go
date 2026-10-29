@@ -77,7 +77,7 @@ func (s *Server) guard(method string, h http.HandlerFunc) http.Handler {
 			writeJSON(w, http.StatusMethodNotAllowed, errBody("method not allowed"))
 			return
 		}
-		if !sameOrigin(r) {
+		if !s.sameOrigin(r) {
 			writeJSON(w, http.StatusForbidden, errBody("cross-site request rejected"))
 			return
 		}
@@ -99,8 +99,9 @@ func (s *Server) guard(method string, h http.HandlerFunc) http.Handler {
 
 // sameOrigin reports whether the request comes from the UI's own origin (or
 // from a non-browser client). "same-site" is rejected too: another port on
-// the same host is same-site but a different application.
-func sameOrigin(r *http.Request) bool {
+// the same host is same-site but a different application. Behind a reverse
+// proxy the Origin carries the public name, so an allowed host also counts.
+func (s *Server) sameOrigin(r *http.Request) bool {
 	switch r.Header.Get("Sec-Fetch-Site") {
 	case "", "same-origin", "none":
 	default:
@@ -111,7 +112,10 @@ func sameOrigin(r *http.Request) bool {
 		return true
 	}
 	u, err := url.Parse(origin)
-	return err == nil && strings.EqualFold(u.Host, r.Host)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Host, r.Host) || (len(s.AllowedHosts) > 0 && s.hostAllowed(u.Host))
 }
 
 // isJSON requires application/json. Browsers send it cross-origin only after

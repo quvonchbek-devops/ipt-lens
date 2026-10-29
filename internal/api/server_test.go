@@ -164,3 +164,20 @@ func TestHealthz(t *testing.T) {
 		t.Fatalf("code = %d body = %q", rec.Code, rec.Body)
 	}
 }
+
+func TestOriginFromAllowedHostBehindProxy(t *testing.T) {
+	h := newTestServer(t, "")
+	w, _ := iptables.NewWatchdog(t.TempDir(), true, time.Minute)
+	h = (&Server{Demo: true, Watch: w, Static: http.NotFoundHandler(),
+		AllowedHosts: []string{"localhost", "127.0.0.1", "fw.example.com"}}).Routes()
+	body := `{"dst_ip":"127.0.0.1"}`
+	rec := do(t, h, http.MethodPost, "/api/v1/simulate", body,
+		withHeader("Origin", "https://fw.example.com"), withHeader("Sec-Fetch-Site", "same-origin"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("proxied same-origin request: code = %d (%s)", rec.Code, rec.Body)
+	}
+	rec = do(t, h, http.MethodPost, "/api/v1/simulate", body, withHeader("Origin", "https://evil.example"))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("foreign origin: code = %d, want 403", rec.Code)
+	}
+}

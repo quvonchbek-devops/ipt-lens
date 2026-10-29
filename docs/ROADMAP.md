@@ -16,8 +16,9 @@ unit and community docs. See [CHANGELOG.md](../CHANGELOG.md).
   `mangle` and `raw` tables in kernel order.
 - **Localization:** the UI string table moves to a locale file; Uzbek as the
   first translation after English.
-- **Safer delete rollback:** re-insert by matching neighbors instead of by bare
-  position, so concurrent changes by other tools cannot shift it.
+- **Safer rollback:** re-insert and restore rules by matching neighbors instead
+  of by bare position, so concurrent changes by other tools cannot shift it, and
+  check the live ruleset before replaying an undo after a crash.
 - **Protect Docker's jump rules:** treat `FORWARD -j DOCKER-USER` and similar
   jumps that Docker manages as locked.
 - **Audit log:** an append-only record of every apply, confirm and rollback.

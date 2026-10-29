@@ -1,13 +1,17 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io/fs"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -30,6 +34,7 @@ func main() {
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 
+	version = displayVersion(version)
 	if *showVersion {
 		fmt.Println("ipt-lens", version)
 		return
@@ -39,8 +44,21 @@ func main() {
 	if token != "" && len(token) < 16 {
 		log.Fatal("IPTLENS_TOKEN must be at least 16 characters")
 	}
-	if !isLoopback(*listen) && token == "" {
+	if !isLoopback(*listen) && token == "" && !*demo {
 		log.Fatal("IPTLENS_TOKEN is required when listening on a non-loopback address")
+	}
+	if token == "" && !*demo {
+		// Loopback is reachable by every local user and by SSRF in local apps,
+		// so a token is always required outside demo mode.
+		t, created, err := loadOrCreateToken(*stateDir)
+		if err != nil {
+			log.Fatal(err)
+		}
+		token = t
+		if created {
+			log.Printf("generated an API token in %s (read it with: sudo cat %s)",
+				filepath.Join(*stateDir, "token"), filepath.Join(*stateDir, "token"))
+		}
 	}
 
 	watch, err := iptables.NewWatchdog(*stateDir, *demo, *timeout,
@@ -62,7 +80,7 @@ func main() {
 	srv := &api.Server{
 		Demo:         *demo,
 		Token:        token,
-		Version:      displayVersion(version),
+		Version:      version,
 		AllowedHosts: hosts,
 		Watch:        watch,
 		Static:       http.FileServer(http.FS(static)),
@@ -92,7 +110,11 @@ func hostAllowlist(listen, extra string) []string {
 	host, _, _ := net.SplitHostPort(listen)
 	var extras []string
 	for _, h := range strings.Split(extra, ",") {
-		if h = strings.TrimSpace(h); h != "" {
+		h = strings.TrimSpace(h)
+		if net.ParseIP(h) == nil {
+			h = (&url.URL{Host: h}).Hostname() // drop a port or IPv6 brackets
+		}
+		if h != "" {
 			extras = append(extras, h)
 		}
 	}
@@ -115,6 +137,36 @@ func displayVersion(v string) string {
 		return "v" + v
 	}
 	return v
+}
+
+// loadOrCreateToken returns the token stored in dir/token, creating a random
+// one (mode 0600) on first use. created reports whether it was just made.
+func loadOrCreateToken(dir string) (token string, created bool, err error) {
+	path := filepath.Join(dir, "token")
+	if b, err := os.ReadFile(path); err == nil {
+		t := strings.TrimSpace(string(b))
+		if len(t) < 16 {
+			return "", false, fmt.Errorf("token in %s is shorter than 16 characters", path)
+		}
+		return t, false, nil
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", false, err
+	}
+	buf := make([]byte, 24)
+	if _, err := rand.Read(buf); err != nil {
+		return "", false, err
+	}
+	t := hex.EncodeToString(buf)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", false, err
+	}
+	if _, err := f.WriteString(t + "\n"); err != nil {
+		f.Close()
+		return "", false, err
+	}
+	return t, true, f.Close()
 }
 
 func isLoopback(addr string) bool {

@@ -114,7 +114,7 @@ rules:
 			continue
 		}
 		step := SimStep{Table: tbl.Name, Chain: ch.Name, RuleID: r.ID, RawRule: r.RawRule, Note: r.Comment}
-		if len(unchecked) > 0 {
+		if len(unchecked) > 0 && decisive(tbl, r) {
 			conds := strings.Join(unchecked, " ")
 			step.Note = joinNote(step.Note, "assumed to match: "+conds)
 			if !s.warned[r] {
@@ -204,6 +204,42 @@ func (s *simCtx) applyDNAT(r *Rule) string {
 	return fmt.Sprintf("Destination rewritten: %s → %s", before, after)
 }
 
+// decisive reports whether r's target can change the verdict (a terminating
+// target or a jump). Guessing the match of a LOG or MARK rule does not matter.
+func decisive(tbl *Table, r *Rule) bool {
+	switch r.Target {
+	case "ACCEPT", "DROP", "REJECT", "RETURN", "DNAT", "REDIRECT", "SNAT", "MASQUERADE":
+		return true
+	}
+	_, jump := tbl.Chains[r.Target]
+	return jump
+}
+
+// assumed lists rule conditions the request leaves unspecified; they match by
+// default, so the verdict depends on an assumption.
+func (s *simCtx) assumed(r *Rule) []string {
+	var a []string
+	if r.Proto != "" && r.Proto != "all" && s.proto == "" {
+		a = append(a, "-p "+r.Proto)
+	}
+	if r.InIface != "" && s.inIf == "" {
+		a = append(a, "-i "+r.InIface)
+	}
+	if r.OutIface != "" && s.outIf == "" {
+		a = append(a, "-o "+r.OutIface)
+	}
+	if r.Source != "" && r.Source != "0.0.0.0/0" && s.src == "" {
+		a = append(a, "-s "+r.Source)
+	}
+	if r.Destination != "" && r.Destination != "0.0.0.0/0" && s.dst == "" {
+		a = append(a, "-d "+r.Destination)
+	}
+	if r.DstPort != "" && s.dstPort == "" {
+		a = append(a, "--dport "+r.DstPort)
+	}
+	return a
+}
+
 // matches reports whether the packet matches r. Conditions the simulator
 // cannot evaluate are assumed to match and returned in unchecked, so the
 // caller can flag the result as approximate.
@@ -226,6 +262,7 @@ func (s *simCtx) matches(r *Rule) (ok bool, unchecked []string) {
 	if r.CtState != "" && !matchCtState(r.CtState, s.ctState) {
 		return false, nil
 	}
+	unchecked = s.assumed(r)
 	if r.DstType != "" {
 		if strings.TrimPrefix(r.DstType, "!") == "LOCAL" {
 			if s.isLocal(s.dst) == strings.HasPrefix(r.DstType, "!") {

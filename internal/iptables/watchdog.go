@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -34,6 +35,7 @@ type Watchdog struct {
 type change struct {
 	Desc    string     `json:"desc"`
 	Undo    [][]string `json:"undo"` // in execution order (reverse of the applied steps)
+	BootID  string     `json:"boot_id,omitempty"`
 	Expires time.Time  `json:"expires"`
 	timer   *time.Timer
 }
@@ -75,17 +77,78 @@ func NewWatchdog(dir string, demo bool, timeout time.Duration, opts ...Option) (
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("cannot create state directory %s: %w", dir, err)
 	}
-	if data, err := os.ReadFile(w.pendingPath()); err == nil {
-		var c change
-		if json.Unmarshal(data, &c) == nil {
-			log.Printf("found unconfirmed change (%s), rolling it back", c.Desc)
-			if err := runUndo(c.Undo); err != nil {
-				log.Printf("rollback error: %v", err)
-			}
-		}
-		_ = os.Remove(w.pendingPath())
+	if err := checkPrivateDir(dir); err != nil {
+		return nil, err
 	}
+	w.recover()
 	return w, nil
+}
+
+// checkPrivateDir refuses a state directory that is a symlink, writable by
+// group or others, or owned by another user: its pending.json drives iptables.
+func checkPrivateDir(dir string) error {
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("state directory %s is not a directory", dir)
+	}
+	if fi.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("state directory %s is writable by group or others (mode %v); use chmod 700", dir, fi.Mode().Perm())
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Geteuid() {
+		return fmt.Errorf("state directory %s is owned by uid %d, not by this process", dir, st.Uid)
+	}
+	return nil
+}
+
+// recover rolls back a change left unconfirmed by a crash or restart. A record
+// from an earlier boot is discarded: the kernel ruleset was rebuilt since.
+func (w *Watchdog) recover() {
+	data, err := os.ReadFile(w.pendingPath())
+	if err != nil {
+		return
+	}
+	defer os.Remove(w.pendingPath())
+	var c change
+	if err := json.Unmarshal(data, &c); err != nil {
+		log.Printf("ignoring unreadable %s: %v", w.pendingPath(), err)
+		return
+	}
+	if c.BootID != "" && c.BootID != bootID() {
+		log.Printf("unconfirmed change (%s) predates the last reboot; not replaying its undo", c.Desc)
+		return
+	}
+	for _, cmd := range c.Undo {
+		if !safeUndo(cmd) {
+			log.Printf("refusing unexpected undo command in %s: %q", w.pendingPath(), cmd)
+			return
+		}
+	}
+	log.Printf("found unconfirmed change (%s), rolling it back", c.Desc)
+	if err := runUndo(c.Undo); err != nil {
+		log.Printf("rollback error: %v", err)
+	}
+}
+
+// safeUndo accepts only the shapes this package writes:
+// -t <table> -D|-I|-R <chain> ..., with no --modprobe.
+func safeUndo(cmd []string) bool {
+	if len(cmd) < 4 || cmd[0] != "-t" || checkNames(cmd[1], cmd[3]) != nil {
+		return false
+	}
+	switch cmd[2] {
+	case "-D", "-I", "-R":
+	default:
+		return false
+	}
+	for _, a := range cmd {
+		if strings.HasPrefix(a, "--modprobe") {
+			return false
+		}
+	}
+	return true
 }
 
 func (w *Watchdog) pendingPath() string { return filepath.Join(w.dir, "pending.json") }
@@ -124,6 +187,10 @@ func (w *Watchdog) begin(build func() (plan, error)) error {
 	if w.pending != nil {
 		return ErrPending
 	}
+	if _, err := os.Stat(w.pendingPath()); err == nil {
+		return fmt.Errorf("%w: an earlier rollback failed; fix the rules by hand (see the log and %s), then remove that file",
+			ErrPending, w.pendingPath())
+	}
 	p, err := build()
 	if err != nil {
 		return err
@@ -133,7 +200,7 @@ func (w *Watchdog) begin(build func() (plan, error)) error {
 		return err
 	}
 
-	c := &change{Desc: p.desc, Undo: reverseUndo(p.steps), Expires: time.Now().Add(w.timeout)}
+	c := &change{Desc: p.desc, Undo: reverseUndo(p.steps), Expires: time.Now().Add(w.timeout), BootID: bootID()}
 	if err := w.writePending(c); err != nil {
 		return fmt.Errorf("cannot record pending change, nothing was applied: %w", err)
 	}
@@ -141,7 +208,12 @@ func (w *Watchdog) begin(build func() (plan, error)) error {
 	for i, st := range p.steps {
 		if out, err := ipt(st.do...); err != nil {
 			applyErr := fmt.Errorf("iptables error: %s", strings.TrimSpace(string(out)))
-			if rbErr := runUndo(reverseUndo(p.steps[:i])); rbErr != nil {
+			c.Undo = reverseUndo(p.steps[:i]) // only the steps that ran
+			if err := w.writePending(c); err != nil {
+				log.Printf("cannot update pending record: %v", err)
+			}
+			if rbErr := runUndo(c.Undo); rbErr != nil {
+				// Keep pending.json: it is the only record of what is still applied.
 				log.Printf("rollback after failed apply: %v", rbErr)
 				return fmt.Errorf("%w (rollback also failed: %v)", applyErr, rbErr)
 			}
@@ -191,6 +263,9 @@ func (w *Watchdog) Apply(req ApplyRequest) error {
 	spec, err := ValidateRule(req.Table, req.Chain, req.Rule)
 	if err != nil {
 		return err
+	}
+	if protectedName(req.Chain) {
+		return ErrProtected
 	}
 	if req.Position < 0 || req.Position > 1000 {
 		return invalidf("position must be between 0 and 1000")
@@ -249,12 +324,43 @@ func (w *Watchdog) Confirm() (persisted bool, err error) {
 	return true, nil
 }
 
+// persist saves the ruleset without chains that Docker, Kubernetes and the
+// like rebuild themselves; restoring their stale rules at boot breaks them.
+// A symlinked persist file is written through to its target.
 func (w *Watchdog) persist() error {
 	rules, err := runSaveRules()
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(w.persistFile, rules, 0o600)
+	path := w.persistFile
+	if target, err := os.Readlink(path); err == nil {
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(path), target)
+		}
+		path = target
+	}
+	return writeFileAtomic(path, stripManaged(rules), 0o600)
+}
+
+// stripManaged drops managed chains, their rules and jumps into them from
+// iptables-save output.
+func stripManaged(save []byte) []byte {
+	var out []byte
+	for _, line := range strings.SplitAfter(string(save), "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, ":") {
+			if f := strings.Fields(t[1:]); len(f) > 0 && protectedName(f[0]) {
+				continue
+			}
+		}
+		if strings.HasPrefix(t, "-A ") {
+			if chain, r, err := parseRuleLine(t); err == nil && isProtected(chain, r) {
+				continue
+			}
+		}
+		out = append(out, line...)
+	}
+	return out
 }
 
 // Status reports whether a change awaits confirmation and the seconds left.

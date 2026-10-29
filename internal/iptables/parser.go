@@ -258,14 +258,14 @@ func parseCounters(raw string) (uint64, uint64) {
 }
 
 // tokenizeRule splits a rule into tokens. A double-quoted value (--comment "a b")
-// is one token; inside quotes, \" and \\ are unescaped as iptables-save writes them.
+// is one token; inside quotes, \", \' and \\ are unescaped as iptables-save writes them.
 func tokenizeRule(s string) []string {
 	var tokens []string
 	var cur strings.Builder
 	inQuotes := false
 	for i := 0; i < len(s); i++ {
 		ch := s[i]
-		if inQuotes && ch == '\\' && i+1 < len(s) && (s[i+1] == '"' || s[i+1] == '\\') {
+		if inQuotes && ch == '\\' && i+1 < len(s) && (s[i+1] == '"' || s[i+1] == '\\' || s[i+1] == '\'') {
 			i++
 			cur.WriteByte(s[i])
 			continue

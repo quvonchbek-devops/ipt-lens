@@ -143,7 +143,7 @@ func TestSimulateFlagsUncheckedKnownFields(t *testing.T) {
 
 func TestSimulateWarnsOncePerRule(t *testing.T) {
 	st := mustParse(t, "*filter\n:INPUT ACCEPT [0:0]\n:FORWARD ACCEPT [0:0]\n:CHK - [0:0]\n"+
-		"-A INPUT -j CHK\n-A INPUT -j CHK\n-A CHK -m limit --limit 1/s -j LOG\nCOMMIT\n")
+		"-A INPUT -j CHK\n-A INPUT -j CHK\n-A CHK -m limit --limit 1/s -j RETURN\nCOMMIT\n")
 	res := SimulatePacket(st, SimRequest{DstIP: "127.0.0.1"})
 	if len(res.Warnings) != 1 {
 		t.Fatalf("want one warning for one rule, got %q", res.Warnings)
@@ -161,5 +161,43 @@ func TestProtectedMarkedByParser(t *testing.T) {
 	}
 	if f.Chains["INPUT"].Rules[0].Protected {
 		t.Fatal("ordinary rule marked protected")
+	}
+}
+
+func TestTokenizeEscapedSingleQuote(t *testing.T) {
+	toks := tokenizeRule(`--comment "Bob\'s VPN" -j ACCEPT`)
+	if len(toks) != 4 || toks[1] != "Bob's VPN" {
+		t.Fatalf("tokens = %q", toks)
+	}
+}
+
+func TestSimulateIgnoresUncheckedNonTerminating(t *testing.T) {
+	st := mustParse(t, "*filter\n:INPUT ACCEPT [0:0]\n-A INPUT -m limit --limit 5/min -j LOG\nCOMMIT\n")
+	res := SimulatePacket(st, SimRequest{SrcIP: "1.2.3.4", DstIP: "127.0.0.1", Proto: "tcp", DstPort: "22"})
+	if res.Uncertain {
+		t.Fatalf("a LOG rule cannot change the verdict, got warnings %q", res.Warnings)
+	}
+}
+
+func TestSimulateFlagsMissingRequestFields(t *testing.T) {
+	st := mustParse(t, "*filter\n:INPUT ACCEPT [0:0]\n-A INPUT -p tcp -m tcp --dport 22 -j DROP\nCOMMIT\n")
+	res := SimulatePacket(st, SimRequest{DstIP: "127.0.0.1"})
+	if res.FinalVerdict != "DROP" || !res.Uncertain {
+		t.Fatalf("verdict %s, uncertain %v: a rule on port/protocol matched a request without them", res.FinalVerdict, res.Uncertain)
+	}
+	if !strings.Contains(res.Warnings[0], "--dport 22") || !strings.Contains(res.Warnings[0], "-p tcp") {
+		t.Fatalf("warning does not name the assumed conditions: %q", res.Warnings)
+	}
+}
+
+func TestStripManaged(t *testing.T) {
+	in := "*filter\n:INPUT DROP [0:0]\n:DOCKER - [0:0]\n:DOCKER-USER - [0:0]\n" +
+		"-A INPUT -p tcp --dport 22 -j ACCEPT\n-A FORWARD -j DOCKER-USER\n-A FORWARD -o docker0 -j DOCKER\n" +
+		"-A DOCKER -d 172.18.0.4/32 -j ACCEPT\n-A DOCKER-USER -j RETURN\nCOMMIT\n"
+	want := "*filter\n:INPUT DROP [0:0]\n:DOCKER-USER - [0:0]\n" +
+		"-A INPUT -p tcp --dport 22 -j ACCEPT\n-A FORWARD -j DOCKER-USER\n" +
+		"-A DOCKER-USER -j RETURN\nCOMMIT\n"
+	if got := string(stripManaged([]byte(in))); got != want {
+		t.Fatalf("stripManaged:\n%s\nwant:\n%s", got, want)
 	}
 }

@@ -15,7 +15,10 @@ First public release.
 - `--persist-file`: on confirm, save the full ruleset (for example to
   `/etc/iptables/rules.v4`) so confirmed changes survive a reboot.
 - `--keep-backups` (default 20): old `iptables-save` snapshots are pruned.
-- `--allowed-hosts` for running behind a reverse proxy.
+- `--allowed-hosts` for running behind a reverse proxy (entries may carry a
+  port or IPv6 brackets).
+- Outside demo mode an API token is always required. If `IPTLENS_TOKEN` is not
+  set, one is generated in `<state-dir>/token` (mode 0600) on first start.
 - `--version` flag. The version is shown in the UI and returned by `/api/v1/state`.
 - `GET /healthz` for liveness checks.
 - The simulator marks a result as approximate, with one warning per rule, when a
@@ -50,7 +53,26 @@ First public release.
   web page could POST a `text/plain` body to `127.0.0.1`. POST now requires
   `application/json`, cross-site and foreign-origin requests are refused, and
   the `Host` header is checked to stop DNS rebinding.
-- Comments containing `\"` from `iptables-save` were parsed incorrectly.
+- Comments containing `\"` or `\'` from `iptables-save` were parsed incorrectly.
+- **Any local process could change the firewall** through the token-less
+  loopback API (another user, or an SSRF in another app on the host). A token is
+  now always required outside demo mode.
+- New rules could be added to Docker, Kubernetes, Calico, libvirt and ufw chains.
+- After a reboot, the undo of an unconfirmed change was replayed against the
+  freshly restored ruleset and could duplicate or overwrite the wrong rule. It
+  is now discarded when the boot ID differs.
+- `pending.json` was trusted blindly. The state directory must now be private,
+  and recorded undo commands are checked before they run.
+- If a rollback after a failed step also failed, its record was lost and the
+  next change could overwrite it. The record now stays and blocks new changes.
+- `--persist-file` saved Docker and Kubernetes chains, whose stale copies broke
+  container networking at boot, and replaced a symlinked file instead of
+  writing its target.
+- Behind a reverse proxy, every browser POST was rejected because the Origin
+  (public name) did not match the Host header.
+- The simulator presented guesses as exact when the request left out a field a
+  rule checks (protocol, port, address, interface), and warned about LOG and
+  other rules that cannot change the verdict.
 - The confirm message claimed the rule was saved permanently even though
   nothing was written to disk.
 - Tertiary text in the UI did not meet WCAG AA contrast.

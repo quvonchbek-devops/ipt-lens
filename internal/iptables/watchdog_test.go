@@ -63,7 +63,7 @@ func twoStepPlan() (plan, error) {
 
 func newTestWatchdog(t *testing.T, timeout time.Duration, opts ...Option) *Watchdog {
 	t.Helper()
-	w, err := NewWatchdog(t.TempDir(), false, timeout, opts...)
+	w, err := NewWatchdog(privateDir(t), false, timeout, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestConfirmClearsPending(t *testing.T) {
 
 func TestRecoverOnStart(t *testing.T) {
 	f := installFake(t)
-	dir := t.TempDir()
+	dir := privateDir(t)
 	pending := `{"desc":"left over","undo":[["-t","filter","-D","INPUT","-j","ACCEPT"]]}`
 	if err := os.WriteFile(filepath.Join(dir, "pending.json"), []byte(pending), 0o600); err != nil {
 		t.Fatal(err)
@@ -206,7 +206,7 @@ func TestBackupsRotated(t *testing.T) {
 func TestConfirmPersists(t *testing.T) {
 	f := installFake(t)
 	f.save = "*filter\n:INPUT DROP [0:0]\n-A INPUT -j ACCEPT\nCOMMIT\n"
-	target := filepath.Join(t.TempDir(), "rules.v4")
+	target := filepath.Join(privateDir(t), "rules.v4")
 	w := newTestWatchdog(t, time.Hour, WithPersistFile(target))
 	if err := w.begin(twoStepPlan); err != nil {
 		t.Fatal(err)
@@ -228,7 +228,7 @@ func TestConfirmPersists(t *testing.T) {
 
 func TestConfirmPersistFailureReported(t *testing.T) {
 	installFake(t)
-	target := filepath.Join(t.TempDir(), "missing-dir", "rules.v4")
+	target := filepath.Join(privateDir(t), "missing-dir", "rules.v4")
 	w := newTestWatchdog(t, time.Hour, WithPersistFile(target))
 	if err := w.begin(twoStepPlan); err != nil {
 		t.Fatal(err)
@@ -239,4 +239,129 @@ func TestConfirmPersistFailureReported(t *testing.T) {
 	if pending, _ := w.Status(); pending {
 		t.Fatal("change must stay confirmed even if persisting failed")
 	}
+}
+
+func TestApplyRefusesProtectedChain(t *testing.T) {
+	f := installFake(t)
+	w := newTestWatchdog(t, time.Hour)
+	for _, chain := range []string{"DOCKER", "KUBE-SERVICES", "cali-INPUT", "ufw-user-input"} {
+		err := w.Apply(ApplyRequest{Table: "filter", Chain: chain, Position: 1, Rule: "-j DROP"})
+		if !errors.Is(err, ErrProtected) {
+			t.Errorf("Apply to %s: got %v, want ErrProtected", chain, err)
+		}
+	}
+	if calls := f.Calls(); len(calls) != 0 {
+		t.Fatalf("iptables was called: %q", calls)
+	}
+}
+
+func TestRecoverSkippedAfterReboot(t *testing.T) {
+	f := installFake(t)
+	old := bootID
+	bootID = func() string { return "boot-2" }
+	t.Cleanup(func() { bootID = old })
+	dir := privateDir(t)
+	pending := `{"desc":"before reboot","boot_id":"boot-1","undo":[["-t","filter","-D","INPUT","-j","ACCEPT"]]}`
+	if err := os.WriteFile(filepath.Join(dir, "pending.json"), []byte(pending), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewWatchdog(dir, false, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if calls := f.Calls(); len(calls) != 0 {
+		t.Fatalf("undo replayed after a reboot: %q", calls)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "pending.json")); !os.IsNotExist(err) {
+		t.Fatal("pending.json not removed")
+	}
+}
+
+func TestRecoverRefusesUnsafeUndo(t *testing.T) {
+	f := installFake(t)
+	dir := privateDir(t)
+	pending := `{"desc":"tampered","undo":[["-t","filter","-D","INPUT","--modprobe=/tmp/x","-j","ACCEPT"],["-F"]]}`
+	if err := os.WriteFile(filepath.Join(dir, "pending.json"), []byte(pending), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewWatchdog(dir, false, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if calls := f.Calls(); len(calls) != 0 {
+		t.Fatalf("unsafe undo was run: %q", calls)
+	}
+}
+
+func TestStateDirMustNotBeWritableByOthers(t *testing.T) {
+	installFake(t)
+	dir := privateDir(t)
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewWatchdog(dir, false, time.Hour); err == nil {
+		t.Fatal("accepted a world-writable state directory")
+	}
+}
+
+func TestFailedRollbackKeepsRecordAndBlocks(t *testing.T) {
+	f := installFake(t)
+	f.failOn = "-A INPUT -j DROP"
+	w := newTestWatchdog(t, time.Hour)
+	f.onCall = func(cmd string) error {
+		if cmd == "-t filter -D INPUT -j ACCEPT" {
+			return errors.New("rollback broke")
+		}
+		return nil
+	}
+	if err := w.begin(twoStepPlan); err == nil {
+		t.Fatal("expected an error")
+	}
+	data, err := os.ReadFile(w.pendingPath())
+	if err != nil {
+		t.Fatal("pending.json removed although rollback failed")
+	}
+	if strings.Contains(string(data), `"DROP"`) {
+		t.Fatalf("pending.json still holds the undo of a step that never ran: %s", data)
+	}
+	f.failOn, f.onCall = "", nil
+	if err := w.begin(twoStepPlan); err == nil {
+		t.Fatal("a new change was accepted while an unresolved rollback is on disk")
+	}
+}
+
+func TestPersistSkipsManagedAndFollowsSymlink(t *testing.T) {
+	f := installFake(t)
+	f.save = "*filter\n:INPUT DROP [0:0]\n:DOCKER - [0:0]\n-A DOCKER -j ACCEPT\nCOMMIT\n"
+	dir := privateDir(t)
+	real := filepath.Join(dir, "rules.real")
+	link := filepath.Join(dir, "rules.v4")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	w := newTestWatchdog(t, time.Hour, WithPersistFile(link))
+	if err := w.begin(twoStepPlan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Confirm(); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("symlink was replaced")
+	}
+	data, err := os.ReadFile(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "DOCKER") {
+		t.Fatalf("managed chain persisted: %s", data)
+	}
+}
+
+// privateDir returns a temp dir with mode 0700 regardless of the umask.
+func privateDir(t *testing.T) string {
+	t.Helper()
+	d := t.TempDir()
+	if err := os.Chmod(d, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return d
 }
