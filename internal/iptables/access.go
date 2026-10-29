@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Level is who may reach a port.
@@ -49,15 +51,60 @@ func (v VPN) trustedFor(v6 bool) []string {
 }
 
 type PortAccess struct {
-	Port  int    `json:"port"`
-	Proto string `json:"proto"`
-	Level Level  `json:"level"`
+	Port    int    `json:"port"`
+	PortEnd int    `json:"port_end,omitempty"` // last port of a range; 0 for a single port
+	Proto   string `json:"proto"`
+	Level   Level  `json:"level"`
+	Note    string `json:"note,omitempty"` // what the port is for, in the user's words
 	// Limit slows down password guessing on a port open to everyone: each
 	// source address gets at most limitRate new connections, the rest dropped.
 	Limit bool `json:"limit,omitempty"`
 }
 
-const limitRate = "6/minute"
+const (
+	limitRate = "6/minute"
+	maxNote   = 40
+)
+
+// noteRe keeps a note safe inside a rule comment and readable back from it:
+// letters, digits, spaces and plain punctuation, but no '=' (the comment's
+// key separator) and no quote or backslash (iptables-restore syntax).
+var noteRe = regexp.MustCompile(`^[\p{L}\p{N} .,:;()/@+_\x{2018}\x{2019}\x{02BB}\x{02BC}-]*$`)
+
+// last returns the last port the entry covers.
+func (pa PortAccess) last() int {
+	if pa.PortEnd > 0 {
+		return pa.PortEnd
+	}
+	return pa.Port
+}
+
+// spec writes the port or range as in a rule comment: 22, or 30000-32767.
+func (pa PortAccess) spec() string {
+	if pa.PortEnd > 0 {
+		return fmt.Sprintf("%d-%d", pa.Port, pa.PortEnd)
+	}
+	return strconv.Itoa(pa.Port)
+}
+
+// matchPorts is the port argument of a rule: 22, or 30000:32767.
+func (pa PortAccess) matchPorts() string { return strings.Replace(pa.spec(), "-", ":", 1) }
+
+// Entry returns the policy entry for a port: its own, or a range covering it.
+func (p AccessPolicy) Entry(port int, proto string) (PortAccess, bool) {
+	var hit PortAccess
+	found := false
+	for _, pa := range p.Ports {
+		if pa.Proto != proto || port < pa.Port || port > pa.last() {
+			continue
+		}
+		if pa.PortEnd == 0 {
+			return pa, true
+		}
+		hit, found = pa, true
+	}
+	return hit, found
+}
 
 // AccessPolicy is the simple view's whole state: a level per port plus a
 // default for every other port, applied to host services and Docker-published
@@ -153,6 +200,15 @@ func (p AccessPolicy) Validate() error {
 		if pa.Port < 1 || pa.Port > 65535 {
 			return invalidf("invalid port: %d", pa.Port)
 		}
+		if pa.PortEnd != 0 && (pa.PortEnd <= pa.Port || pa.PortEnd > 65535) {
+			return invalidf("invalid port range %d-%d: the end must be above the start and at most 65535", pa.Port, pa.PortEnd)
+		}
+		if pa.PortEnd != 0 && pa.Limit {
+			return invalidf("slowing down guesses works on a single port, not the range %s", pa.spec())
+		}
+		if utf8.RuneCountInString(pa.Note) > maxNote || !noteRe.MatchString(pa.Note) {
+			return invalidf("the note on port %s may have up to %d letters, digits, spaces and . , : ; ( ) / @ + _ -", pa.spec(), maxNote)
+		}
 		if pa.Proto != "tcp" && pa.Proto != "udp" {
 			return invalidf("invalid protocol for port %d: %q", pa.Port, pa.Proto)
 		}
@@ -162,11 +218,17 @@ func (p AccessPolicy) Validate() error {
 		if pa.Limit && (pa.Proto != "tcp" || pa.Level != LevelPublic) {
 			return invalidf("slowing down guesses works only on a TCP port open to everyone (port %d)", pa.Port)
 		}
-		key := fmt.Sprintf("%d/%s", pa.Port, pa.Proto)
+		key := fmt.Sprintf("%s/%s", pa.spec(), pa.Proto)
 		if seen[key] {
 			return invalidf("port %s listed twice", key)
 		}
 		seen[key] = true
+		// Overlapping entries would shadow each other: the first rule wins.
+		for _, other := range p.Ports {
+			if other != pa && other.Proto == pa.Proto && other.Port <= pa.last() && pa.Port <= other.last() {
+				return invalidf("ports %s and %s overlap; split the range or drop one", pa.spec(), other.spec())
+			}
+		}
 		needsVPN = needsVPN || pa.Level == LevelVPN
 	}
 	if needsVPN && p.VPN.Empty() {
@@ -258,9 +320,12 @@ func (p AccessPolicy) levelRules(level Level, match []string, note string, v6 bo
 }
 
 func portNote(pa PortAccess) string {
-	s := fmt.Sprintf("iptlens:port=%d/%s level=%s", pa.Port, pa.Proto, pa.Level)
+	s := fmt.Sprintf("iptlens:port=%s/%s level=%s", pa.spec(), pa.Proto, pa.Level)
 	if pa.Limit {
 		s += " limit"
+	}
+	if pa.Note != "" { // last, so it may contain spaces
+		s += " note=" + pa.Note
 	}
 	return s
 }
@@ -292,7 +357,7 @@ func inputRules(p AccessPolicy, v6 bool) [][]string {
 	}
 	rules = append(rules, internalRules()...)
 	for _, pa := range p.Ports {
-		match := []string{"-p", pa.Proto, "--dport", strconv.Itoa(pa.Port)}
+		match := []string{"-p", pa.Proto, "--dport", pa.matchPorts()}
 		rules = append(rules, p.levelRules(pa.Level, match, portNote(pa), v6, limitName("in", pa))...)
 	}
 	if p.Default != LevelPublic {
@@ -310,7 +375,7 @@ func dockerRules(p AccessPolicy, v6 bool) [][]string {
 	}
 	rules = append(rules, internalRules()...)
 	for _, pa := range p.Ports {
-		match := []string{"-p", pa.Proto, "-m", "conntrack", "--ctorigdstport", strconv.Itoa(pa.Port)}
+		match := []string{"-p", pa.Proto, "-m", "conntrack", "--ctorigdstport", pa.matchPorts()}
 		rules = append(rules, p.levelRules(pa.Level, match, portNote(pa), v6, limitName("dk", pa))...)
 	}
 	if p.Default != LevelPublic {
@@ -371,18 +436,27 @@ func ReadAccess(st *SystemState) (AccessPolicy, bool) {
 		if !ok {
 			continue
 		}
+		rest, note, _ := strings.Cut(rest, " note=")
 		spec, lvl, _ := strings.Cut(rest, " level=")
 		lvl, flag, _ := strings.Cut(lvl, " ")
 		if seen[spec] {
 			continue
 		}
 		seen[spec] = true
-		port, proto, _ := strings.Cut(spec, "/")
-		n, err := strconv.Atoi(port)
+		ports, proto, _ := strings.Cut(spec, "/")
+		from, to, isRange := strings.Cut(ports, "-")
+		n, err := strconv.Atoi(from)
 		if err != nil {
 			continue
 		}
-		p.Ports = append(p.Ports, PortAccess{Port: n, Proto: proto, Level: Level(lvl), Limit: flag == "limit"})
+		end := 0
+		if isRange {
+			if end, err = strconv.Atoi(to); err != nil {
+				continue
+			}
+		}
+		p.Ports = append(p.Ports, PortAccess{Port: n, PortEnd: end, Proto: proto, Level: Level(lvl),
+			Limit: flag == "limit", Note: note})
 	}
 	return p, true
 }

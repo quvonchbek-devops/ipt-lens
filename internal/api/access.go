@@ -17,13 +17,15 @@ type accessRow struct {
 	Port       int            `json:"port"`
 	Proto      string         `json:"proto"`
 	Name       string         `json:"name"`
-	Host       bool           `json:"host"`              // a host process listens on it
-	Containers []string       `json:"containers"`        // containers publishing it
-	Level      iptables.Level `json:"level"`             // effective level
-	Explicit   bool           `json:"explicit"`          // set for this port, not inherited from "everything else"
-	Locked     bool           `json:"locked"`            // IPT-Lens' own port: never below "VPN only"
-	Risk       string         `json:"risk,omitempty"`    // why it should not be open to everyone
-	Program    string         `json:"program,omitempty"` // the process listening on it, e.g. nginx
+	Host       bool           `json:"host"`               // a host process listens on it
+	Containers []string       `json:"containers"`         // containers publishing it
+	Level      iptables.Level `json:"level"`              // effective level
+	Explicit   bool           `json:"explicit"`           // set for this port, not inherited from "everything else"
+	Locked     bool           `json:"locked"`             // IPT-Lens' own port: never below "VPN only"
+	Risk       string         `json:"risk,omitempty"`     // why it should not be open to everyone
+	Program    string         `json:"program,omitempty"`  // the process listening on it, e.g. nginx
+	PortEnd    int            `json:"port_end,omitempty"` // last port of a range
+	Note       string         `json:"note,omitempty"`     // the user's description
 }
 
 type accessView struct {
@@ -73,6 +75,12 @@ var levelLabel = map[iptables.Level]string{
 	iptables.LevelPublic: "Everyone", iptables.LevelVPN: "VPN only", iptables.LevelClosed: "Nobody",
 }
 
+// wellKnown are the ports whose loss cuts the user off: SSH and VPN endpoints.
+var wellKnown = []struct {
+	port        int
+	proto, name string
+}{{22, "tcp", "SSH"}, {51820, "udp", "WireGuard"}, {41641, "udp", "Tailscale"}, {1194, "udp", "OpenVPN"}}
+
 // vpnServices are VPN endpoints: clients reach them before they are on the VPN.
 var vpnServices = map[string]bool{"WireGuard": true, "Tailscale": true, "OpenVPN": true}
 
@@ -95,13 +103,25 @@ func (s *Server) ipv6Coverage(st *iptables.SystemState) (available, covered bool
 	return iptables.IPv6Coverage(st)
 }
 
-// levelOf returns the effective level of a port under p, and whether p sets it
-// explicitly. An unconfigured policy (empty default) lets everything through.
-func levelOf(p iptables.AccessPolicy, port int, proto string) (iptables.Level, bool) {
+// exact returns p's own entry for a port or range (end 0 for a single port).
+func exact(p iptables.AccessPolicy, port, end int, proto string) (iptables.PortAccess, bool) {
 	for _, pa := range p.Ports {
-		if pa.Port == port && pa.Proto == proto {
-			return pa.Level, true
+		if pa.Port == port && pa.PortEnd == end && pa.Proto == proto {
+			return pa, true
 		}
+	}
+	return iptables.PortAccess{}, false
+}
+
+// levelOf returns the effective level of a port or range under p, and whether
+// p sets it explicitly; a single port inside a range follows the range. An
+// unconfigured policy (empty default) lets everything through.
+func levelOf(p iptables.AccessPolicy, port, end int, proto string) (iptables.Level, bool) {
+	if pa, ok := exact(p, port, end, proto); ok {
+		return pa.Level, true
+	}
+	if pa, ok := p.Entry(port, proto); ok && end == 0 {
+		return pa.Level, false
 	}
 	if p.Default == "" {
 		return iptables.LevelPublic, false
@@ -109,35 +129,38 @@ func levelOf(p iptables.AccessPolicy, port int, proto string) (iptables.Level, b
 	return p.Default, false
 }
 
-func portKey(port int, proto string) string { return fmt.Sprintf("%d/%s", port, proto) }
+func portKey(port, end int, proto string) string { return fmt.Sprintf("%d-%d/%s", port, end, proto) }
 
 func (s *Server) buildView(st *iptables.SystemState, d discovery) accessView {
 	cur, configured := iptables.ReadAccess(st)
 	rows := map[string]*accessRow{}
-	row := func(port int, proto string) *accessRow {
-		k := portKey(port, proto)
+	row := func(port, end int, proto string) *accessRow {
+		k := portKey(port, end, proto)
 		if r, ok := rows[k]; ok {
 			return r
 		}
-		r := &accessRow{Port: port, Proto: proto, Name: ports.Name(ports.Port{Number: port, Proto: proto}),
-			Risk: ports.Risk(ports.Port{Number: port, Proto: proto}), Containers: []string{}}
+		r := &accessRow{Port: port, PortEnd: end, Proto: proto, Containers: []string{}}
+		if end == 0 {
+			r.Name = ports.Name(ports.Port{Number: port, Proto: proto})
+			r.Risk = ports.Risk(ports.Port{Number: port, Proto: proto})
+		}
 		rows[k] = r
 		return r
 	}
 	for _, l := range d.listening {
-		r := row(l.Number, l.Proto)
+		r := row(l.Number, 0, l.Proto)
 		r.Host = true
 		r.Program = d.programs[l]
 	}
 	for _, p := range d.published {
-		r := row(p.Port, p.Proto)
+		r := row(p.Port, 0, p.Proto)
 		r.Containers = append(r.Containers, p.Container)
 	}
 	for _, pa := range cur.Ports {
-		row(pa.Port, pa.Proto)
+		row(pa.Port, pa.PortEnd, pa.Proto).Note = pa.Note
 	}
 	if s.LensPort > 0 {
-		row(s.LensPort, "tcp").Locked = true
+		row(s.LensPort, 0, "tcp").Locked = true
 	}
 	hasChain, covered := iptables.DockerCoverage(st)
 	dn := dockerNotes(hasChain, covered || !configured, len(d.published))
@@ -151,7 +174,7 @@ func (s *Server) buildView(st *iptables.SystemState, d discovery) accessView {
 		v.Policy.Ports = []iptables.PortAccess{}
 	}
 	for _, r := range rows {
-		r.Level, r.Explicit = levelOf(cur, r.Port, r.Proto)
+		r.Level, r.Explicit = levelOf(cur, r.Port, r.PortEnd, r.Proto)
 		v.Rows = append(v.Rows, *r)
 	}
 	sort.Slice(v.Rows, func(i, j int) bool {
@@ -182,13 +205,19 @@ func pinLensPort(p iptables.AccessPolicy, port int) (iptables.AccessPolicy, erro
 	out.Ports = append([]iptables.PortAccess(nil), p.Ports...)
 	idx := -1
 	for i, pa := range out.Ports {
-		if pa.Port == port && pa.Proto == "tcp" {
+		if pa.Port == port && pa.PortEnd == 0 && pa.Proto == "tcp" {
 			idx = i
 		}
 	}
 	level := p.Default
 	if idx >= 0 {
 		level = out.Ports[idx].Level
+	} else if pa, ok := p.Entry(port, "tcp"); ok {
+		if pa.Level == iptables.LevelClosed {
+			return out, fmt.Errorf("%w: IPT-Lens itself listens on port %d, inside the range %d-%d set to Nobody. "+
+				"Leave port %d out of the range, so the panel stays reachable", iptables.ErrInvalid, port, pa.Port, pa.PortEnd, port)
+		}
+		return out, nil
 	}
 	if level != iptables.LevelClosed {
 		return out, nil
@@ -246,8 +275,11 @@ func (s *Server) handleAccessApply(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "pending_confirm", "timeout_sec": rem})
 }
 
-func rowLabel(port int, proto, name string) string {
+func rowLabel(port, end int, proto, name string) string {
 	label := fmt.Sprintf("Port %d", port)
+	if end > 0 {
+		label = fmt.Sprintf("Ports %d–%d", port, end)
+	}
 	if proto != "tcp" {
 		label += "/" + proto
 	}
@@ -277,26 +309,27 @@ func previewOf(cur, next iptables.AccessPolicy, rows []accessRow, ipv6 bool) acc
 		}
 		pv.Changes = append(pv.Changes, "Trusted addresses (let in wherever \"VPN only\" is set): "+b)
 	}
-	curDef, _ := levelOf(cur, 0, "")
-	nextDef, _ := levelOf(next, 0, "")
+	curDef, _ := levelOf(cur, 0, 0, "")
+	nextDef, _ := levelOf(next, 0, 0, "")
 	if curDef != nextDef {
 		pv.Changes = append(pv.Changes, fmt.Sprintf("Any other port: %s → %s", levelLabel[curDef], levelLabel[nextDef]))
 	}
 
 	type key struct {
-		port  int
-		proto string
+		port, end int
+		proto     string
 	}
 	names := map[key]string{}
 	keys := map[key]bool{}
 	for _, r := range rows {
-		names[key{r.Port, r.Proto}] = r.Name
-		keys[key{r.Port, r.Proto}] = true
+		names[key{r.Port, r.PortEnd, r.Proto}] = r.Name
+		keys[key{r.Port, r.PortEnd, r.Proto}] = true
 	}
 	for _, pa := range next.Ports {
-		keys[key{pa.Port, pa.Proto}] = true
-		if _, ok := names[key{pa.Port, pa.Proto}]; !ok {
-			names[key{pa.Port, pa.Proto}] = ports.Name(ports.Port{Number: pa.Port, Proto: pa.Proto})
+		k := key{pa.Port, pa.PortEnd, pa.Proto}
+		keys[k] = true
+		if _, ok := names[k]; !ok && pa.PortEnd == 0 {
+			names[k] = ports.Name(ports.Port{Number: pa.Port, Proto: pa.Proto})
 		}
 	}
 	sorted := make([]key, 0, len(keys))
@@ -307,41 +340,72 @@ func previewOf(cur, next iptables.AccessPolicy, rows []accessRow, ipv6 bool) acc
 		if sorted[i].port != sorted[j].port {
 			return sorted[i].port < sorted[j].port
 		}
+		if sorted[i].end != sorted[j].end {
+			return sorted[i].end < sorted[j].end
+		}
 		return sorted[i].proto < sorted[j].proto
 	})
-	limited := func(p iptables.AccessPolicy, k key) bool {
-		for _, pa := range p.Ports {
-			if pa.Port == k.port && pa.Proto == k.proto {
-				return pa.Limit
-			}
+	warned := map[string]bool{}
+	warnLeaving := func(label, name string, from, to iptables.Level) {
+		if from != iptables.LevelPublic || warned[name] {
+			return
 		}
-		return false
+		switch {
+		case vpnServices[name]:
+			warned[name] = true
+			pv.Warnings = append(pv.Warnings, fmt.Sprintf(
+				"%s is your VPN's own port: devices connect to it from the internet. Setting it to %s disconnects the VPN. "+
+					"Keep it at Everyone.", label, strings.ToLower(levelLabel[to])))
+		case name == "SSH":
+			warned[name] = true
+			pv.Warnings = append(pv.Warnings, fmt.Sprintf(
+				"SSH will be reachable by %s. If you are connected over SSH without the VPN, you will be cut off. "+
+					"The change rolls back automatically unless you confirm it.", strings.ToLower(levelLabel[to])))
+		}
+	}
+	limited := func(p iptables.AccessPolicy, k key) bool {
+		pa, _ := exact(p, k.port, k.end, k.proto)
+		return pa.Limit
 	}
 	for _, k := range sorted {
-		from, _ := levelOf(cur, k.port, k.proto)
-		to, _ := levelOf(next, k.port, k.proto)
+		from, _ := levelOf(cur, k.port, k.end, k.proto)
+		to, _ := levelOf(next, k.port, k.end, k.proto)
+		label := rowLabel(k.port, k.end, k.proto, names[k])
+		a, _ := exact(cur, k.port, k.end, k.proto)
+		b, _ := exact(next, k.port, k.end, k.proto)
+		if a.Note != b.Note {
+			if b.Note == "" {
+				pv.Changes = append(pv.Changes, label+": description removed")
+			} else {
+				pv.Changes = append(pv.Changes, fmt.Sprintf("%s: described as “%s”", label, b.Note))
+			}
+		}
 		if from == to {
 			if a, b := limited(cur, k), limited(next, k); a != b {
 				verb := map[bool]string{true: "slow down password guessing (at most 6 new connections a minute per address)",
 					false: "stop slowing down password guessing"}[b]
-				pv.Changes = append(pv.Changes, fmt.Sprintf("%s: %s", rowLabel(k.port, k.proto, names[k]), verb))
+				pv.Changes = append(pv.Changes, fmt.Sprintf("%s: %s", label, verb))
 			}
 			continue
 		}
-		pv.Changes = append(pv.Changes, fmt.Sprintf("%s: %s → %s", rowLabel(k.port, k.proto, names[k]), levelLabel[from], levelLabel[to]))
+		pv.Changes = append(pv.Changes, fmt.Sprintf("%s: %s → %s", label, levelLabel[from], levelLabel[to]))
 		if limited(next, k) {
 			pv.Changes = append(pv.Changes, fmt.Sprintf("%s: slow down password guessing (at most 6 new connections a minute per address)",
-				rowLabel(k.port, k.proto, names[k])))
+				label))
 		}
-		if vpnServices[names[k]] && from == iptables.LevelPublic {
-			pv.Warnings = append(pv.Warnings, fmt.Sprintf(
-				"%s is your VPN's own port: devices connect to it from the internet. Setting it to %s disconnects the VPN. "+
-					"Keep it at Everyone.", rowLabel(k.port, k.proto, names[k]), strings.ToLower(levelLabel[to])))
+		warnLeaving(label, names[k], from, to)
+	}
+	// A range can also cover SSH or a VPN's port that is not in the list (a
+	// kernel WireGuard has no listening process to discover).
+	for _, wk := range wellKnown {
+		k := key{wk.port, 0, wk.proto}
+		if keys[k] {
+			continue // warned above
 		}
-		if names[k] == "SSH" && from == iptables.LevelPublic {
-			pv.Warnings = append(pv.Warnings, fmt.Sprintf(
-				"SSH will be reachable by %s. If you are connected over SSH without the VPN, you will be cut off. "+
-					"The change rolls back automatically unless you confirm it.", strings.ToLower(levelLabel[to])))
+		from, _ := levelOf(cur, wk.port, 0, wk.proto)
+		to, _ := levelOf(next, wk.port, 0, wk.proto)
+		if from != to {
+			warnLeaving(rowLabel(wk.port, 0, wk.proto, wk.name), wk.name, from, to)
 		}
 	}
 	if len(pv.Changes) == 0 {

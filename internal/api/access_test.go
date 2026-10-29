@@ -280,3 +280,51 @@ func TestAccessPreviewLimit(t *testing.T) {
 		t.Fatalf("changes = %q", p.Changes)
 	}
 }
+
+func TestAccessPreviewRangeAndNote(t *testing.T) {
+	code, p := preview(t, `{"vpn":{"ifaces":["wg0"],"subnets":[]},"default":"public",
+		"ports":[{"port":30000,"port_end":32767,"proto":"tcp","level":"vpn","note":"NodePorts"}]}`)
+	if code != http.StatusOK {
+		t.Fatalf("code = %d", code)
+	}
+	all := strings.Join(p.Changes, "\n")
+	if !strings.Contains(all, "Ports 30000–32767: Everyone → VPN only") || !strings.Contains(all, "“NodePorts”") {
+		t.Fatalf("changes = %q", p.Changes)
+	}
+	if !strings.Contains(strings.Join(p.Commands, "\n"), "--dport 30000:32767") {
+		t.Fatalf("commands lack the range:\n%s", strings.Join(p.Commands, "\n"))
+	}
+}
+
+func TestLevelOfRange(t *testing.T) {
+	p := iptables.AccessPolicy{Default: iptables.LevelPublic, Ports: []iptables.PortAccess{
+		{Port: 30000, PortEnd: 32767, Proto: "tcp", Level: iptables.LevelVPN}}}
+	if l, explicit := levelOf(p, 30080, 0, "tcp"); l != iptables.LevelVPN || explicit {
+		t.Fatalf("a port inside the range: %s, explicit=%v", l, explicit)
+	}
+	if l, explicit := levelOf(p, 30000, 32767, "tcp"); l != iptables.LevelVPN || !explicit {
+		t.Fatalf("the range itself: %s, explicit=%v", l, explicit)
+	}
+}
+
+func TestPinLensPortInsideClosedRange(t *testing.T) {
+	p := iptables.AccessPolicy{VPN: iptables.VPN{Ifaces: []string{"wg0"}}, Default: iptables.LevelPublic,
+		Ports: []iptables.PortAccess{{Port: 8000, PortEnd: 9000, Proto: "tcp", Level: iptables.LevelClosed}}}
+	if _, err := pinLensPort(p, 8090); err == nil || !strings.Contains(err.Error(), "8000-9000") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestPreviewWarnsWhenRangeCoversSSHOrVPN(t *testing.T) {
+	cur := iptables.AccessPolicy{Default: iptables.LevelPublic}
+	next := iptables.AccessPolicy{VPN: iptables.VPN{Ifaces: []string{"wg0"}}, Default: iptables.LevelPublic,
+		Ports: []iptables.PortAccess{
+			{Port: 20, PortEnd: 30, Proto: "tcp", Level: iptables.LevelVPN},
+			{Port: 50000, PortEnd: 60000, Proto: "udp", Level: iptables.LevelClosed},
+		}}
+	pv := previewOf(cur, next, nil, false)
+	all := strings.Join(pv.Warnings, "\n")
+	if !strings.Contains(all, "SSH will be reachable by vpn only") || !strings.Contains(all, "WireGuard") {
+		t.Fatalf("warnings = %q", pv.Warnings)
+	}
+}

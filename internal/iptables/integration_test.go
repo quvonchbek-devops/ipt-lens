@@ -417,3 +417,24 @@ func TestIntegrationFreshHostWithoutTables(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestIntegrationRangeAndNotes(t *testing.T) {
+	integration(t)
+	w, err := NewWatchdog(privateDir(t), false, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := rangePolicy()
+	p.Ports[0].Note = "SSH for the team; o‘rniga (test)"
+	if err := w.ApplyAccess(p); err != nil {
+		t.Fatal(err)
+	}
+	for _, v6 := range []bool{false, true} {
+		if got, ok := ReadAccess(liveState(t, v6)); !ok || !reflect.DeepEqual(got, sortedPorts(p)) {
+			t.Fatalf("v6=%v: read back %+v (ok=%v), want %+v", v6, got, ok, sortedPorts(p))
+		}
+	}
+	if err := w.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+}

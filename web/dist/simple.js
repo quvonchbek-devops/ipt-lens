@@ -30,7 +30,10 @@
   let draft = null; // the policy being edited
   let vpnOpen = false; // the VPN picker stays folded once a VPN is chosen
 
-  const key = (port, proto) => `${port}/${proto}`;
+  // A row or policy entry is a single port or a range ({port, port_end, proto}).
+  const endOf = (x) => x.port_end || 0;
+  const key = (x) => `${x.port}-${endOf(x)}/${x.proto}`;
+  const portLabel = (x) => (endOf(x) ? `${x.port}–${x.port_end}` : String(x.port)) + (x.proto !== "tcp" ? "/" + x.proto : "");
   const clone = (o) => JSON.parse(JSON.stringify(o));
 
   function normalize(p, configured) {
@@ -45,9 +48,15 @@
     return n;
   }
 
-  function levelIn(p, port, proto) {
-    const e = p.ports.find((x) => x.port === port && x.proto === proto);
-    return e ? { level: e.level, explicit: true } : { level: p.default, explicit: false };
+  const entryOf = (p, r) => p.ports.find((x) => x.port === r.port && endOf(x) === endOf(r) && x.proto === r.proto);
+
+  // The level of a row: its own entry, else a range covering it, else "Any other port".
+  function levelIn(p, r) {
+    const e = entryOf(p, r);
+    if (e) return { level: e.level, explicit: true };
+    const range = !endOf(r) && p.ports.find((x) => endOf(x) && x.proto === r.proto && r.port >= x.port && r.port <= x.port_end);
+    if (range) return { level: range.level, explicit: false, range };
+    return { level: p.default, explicit: false };
   }
 
   // "VPN only" lets in the VPN and the trusted addresses.
@@ -57,13 +66,13 @@
   // Every row to show: discovered ports plus ports only the draft mentions.
   function allRows() {
     const rows = view.rows.map((r) => ({ ...r }));
-    const seen = new Set(rows.map((r) => key(r.port, r.proto)));
+    const seen = new Set(rows.map(key));
     draft.ports.forEach((p) => {
-      if (!seen.has(key(p.port, p.proto))) {
-        rows.push({ port: p.port, proto: p.proto, name: "", host: false, containers: [], locked: false, added: true });
+      if (!seen.has(key(p))) {
+        rows.push({ port: p.port, port_end: p.port_end, proto: p.proto, name: "", host: false, containers: [], locked: false, added: true });
       }
     });
-    return rows.sort((a, b) => a.port - b.port || a.proto.localeCompare(b.proto));
+    return rows.sort((a, b) => a.port - b.port || endOf(a) - endOf(b) || a.proto.localeCompare(b.proto));
   }
 
   function changeCount() {
@@ -72,23 +81,33 @@
     if (base.default !== draft.default) n++;
     // A row that just follows "Any other port" is covered by the default's change.
     allRows().forEach((r) => {
-      const a = levelIn(base, r.port, r.proto);
-      const b = levelIn(draft, r.port, r.proto);
+      const a = levelIn(base, r);
+      const b = levelIn(draft, r);
       if ((a.explicit || b.explicit) && a.level !== b.level) n++;
-      else if (limitIn(base, r.port, r.proto) !== limitIn(draft, r.port, r.proto)) n++;
+      else if (limitIn(base, r) !== limitIn(draft, r) || noteIn(base, r) !== noteIn(draft, r)) n++;
     });
     return n;
   }
 
-  function setLevel(port, proto, level) {
-    const e = draft.ports.find((x) => x.port === port && x.proto === proto);
-    if (e) {
-      e.level = level;
-      if (level !== "public") delete e.limit; // slowing down only applies to "Everyone"
-    } else draft.ports.push({ port, proto, level });
+  // entry returns the draft's own entry for a row, creating it at its current level.
+  function entry(r) {
+    let e = entryOf(draft, r);
+    if (!e) {
+      e = { port: r.port, proto: r.proto, level: levelIn(draft, r).level };
+      if (endOf(r)) e.port_end = r.port_end;
+      draft.ports.push(e);
+    }
+    return e;
   }
 
-  const limitIn = (p, port, proto) => !!(p.ports.find((x) => x.port === port && x.proto === proto) || {}).limit;
+  function setLevel(r, level) {
+    const e = entry(r);
+    e.level = level;
+    if (level !== "public") delete e.limit; // slowing down only applies to "Everyone"
+  }
+
+  const limitIn = (p, r) => !!(entryOf(p, r) || {}).limit;
+  const noteIn = (p, r) => (entryOf(p, r) || {}).note || "";
 
   /* ---------- mode ---------- */
   function setMode(mode) {
@@ -142,7 +161,7 @@
     return group;
   }
 
-  const titleOf = (r) => r.name || r.program || (r.containers.length ? r.containers[0] : r.host ? "Unknown service" : "Custom port");
+  const titleOf = (r) => r.name || r.program || (r.containers.length ? r.containers[0] : r.host ? "Unknown service" : endOf(r) ? "Port range" : "Custom port");
 
   function describe(r, exposed = false) {
     const title = titleOf(r);
@@ -211,29 +230,78 @@
       : "Pick the VPN your devices connect through, or add a trusted address. “VPN only” needs one of them.";
   }
 
+  // noteEditor shows a port's description, or an "Add description" link that
+  // turns into a field (Enter or leaving the field keeps it, Escape cancels).
+  function noteEditor(r) {
+    const box = L.el("div", "s-note-line");
+    const note = noteIn(draft, r);
+    const open = L.el("button", note ? "s-note-text s-note-btn" : "s-note-add", note || "Add description");
+    open.type = "button";
+    open.title = note ? "Edit the description" : "Say what this port is for, e.g. “Grafana for the team”";
+    open.addEventListener("click", () => {
+      const input = L.el("input", "s-note-input");
+      input.maxLength = 40;
+      input.value = note;
+      input.placeholder = "What is this port for?";
+      input.setAttribute("aria-label", `Description of port ${portLabel(r)}`);
+      let done = false;
+      const finish = (keep) => {
+        if (done) return;
+        done = true;
+        const v = input.value.trim();
+        if (keep && v !== note) {
+          const e = entry(r);
+          if (v) e.note = v; else delete e.note;
+        }
+        render();
+      };
+      input.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") finish(true);
+        if (ev.key === "Escape") finish(false);
+      });
+      input.addEventListener("blur", () => finish(true));
+      box.replaceChildren(input);
+      input.focus();
+    });
+    box.append(open);
+    return box;
+  }
+
   function renderRows() {
     const box = $("s-rows");
     box.innerHTML = "";
     const rows = allRows();
     if (!rows.length) box.append(L.el("p", "empty", "No listening ports found."));
     rows.forEach((r) => {
-      const cur = levelIn(draft, r.port, r.proto);
-      const was = levelIn(base, r.port, r.proto).level;
-      const changed = cur.level !== was || limitIn(base, r.port, r.proto) !== limitIn(draft, r.port, r.proto);
+      const cur = levelIn(draft, r);
+      const was = levelIn(base, r).level;
+      const changed = cur.level !== was || limitIn(base, r) !== limitIn(draft, r) || noteIn(base, r) !== noteIn(draft, r);
       const row = L.el("div", "s-row" + (changed ? " changed" : ""));
-      const port = L.el("div", "s-port mono", String(r.port));
+      const port = L.el("div", endOf(r) ? "s-port s-range mono" : "s-port mono", endOf(r) ? `${r.port}–${r.port_end}` : String(r.port));
       if (r.proto !== "tcp") port.append(L.el("span", "s-proto", "/" + r.proto));
       const what = L.el("div", "s-what");
       what.innerHTML = describe(r, cur.level === "public");
+      // A port inside a range follows it; it is changed on the range's row, since
+      // an entry of its own would overlap the range.
+      if (cur.range) {
+        what.append(L.el("div", "s-note-text", `Follows the range ${portLabel(cur.range)}. Change it on that row.`));
+        const lvl = L.el("span", `s-lvl-static s-lvl-${cur.level}`);
+        lvl.innerHTML = LEVEL_ICON[cur.level];
+        lvl.append(LABEL[cur.level]);
+        row.append(port, what, lvl);
+        box.append(row);
+        return;
+      }
+      what.append(noteEditor(r));
       // SSH open to everyone attracts password guessing; offer to slow it down.
       if (r.name === "SSH" && r.proto === "tcp" && cur.level === "public") {
         const l = L.el("label", "check s-limit");
         const c = L.el("input");
         c.type = "checkbox";
-        c.checked = limitIn(draft, r.port, r.proto);
+        c.checked = limitIn(draft, r);
         c.addEventListener("change", () => {
-          setLevel(r.port, r.proto, "public");
-          draft.ports.find((x) => x.port === r.port && x.proto === r.proto).limit = c.checked || undefined;
+          setLevel(r, "public");
+          entry(r).limit = c.checked || undefined;
           render();
         });
         const txt = L.el("span", "", "Slow down password guessing");
@@ -243,7 +311,7 @@
       }
       row.append(port, what, levelButtons(r.port, r.proto, cur.level, {
         locked: r.locked,
-        onPick: (lvl) => { setLevel(r.port, r.proto, lvl); render(); },
+        onPick: (lvl) => { setLevel(r, lvl); render(); },
       }));
       box.append(row);
     });
@@ -266,18 +334,18 @@
   // stands, with one button that fixes the worst problem.
   function renderVerdict() {
     const box = $("s-verdict");
-    const open = allRows().filter((r) => levelIn(draft, r.port, r.proto).level === "public");
+    const open = allRows().filter((r) => levelIn(draft, r).level === "public");
     const risky = open.filter((r) => r.risk);
     // A VPN endpoint must stay reachable from the internet, or the VPN goes down
     // and "VPN only" locks everyone out.
     const endpoints = draft.vpn.ifaces.length + draft.vpn.subnets.length > 0
-      ? allRows().filter((r) => VPN_ENDPOINTS.has(r.name) && levelIn(draft, r.port, r.proto).level !== "public")
+      ? allRows().filter((r) => VPN_ENDPOINTS.has(r.name) && levelIn(draft, r).level !== "public")
       : [];
     const portList = (rows, withRisk) => {
       const ul = L.el("ul", "s-v-ports");
       rows.forEach((r) => {
         const li = L.el("li");
-        li.innerHTML = `<b>${L.esc(titleOf(r))}</b> <span class="mono">${r.port}${r.proto !== "tcp" ? "/" + r.proto : ""}</span>`
+        li.innerHTML = `<b>${L.esc(titleOf(r))}</b> <span class="mono">${portLabel(r)}</span>`
           + (withRisk ? ` <span class="s-v-why">${L.esc(r.risk)}</span>` : "");
         ul.append(li);
       });
@@ -292,7 +360,7 @@
       action = {
         label: endpoints.length === 1 ? `Keep ${endpoints[0].name} open` : "Keep them open",
         cls: "btn-danger",
-        run: () => { endpoints.forEach((r) => setLevel(r.port, r.proto, "public")); render(); },
+        run: () => { endpoints.forEach((r) => setLevel(r, "public")); render(); },
       };
     } else if (risky.length) {
       tone = "bad";
@@ -307,7 +375,7 @@
         label: to === "vpn" ? `Make ${n === 1 ? "it" : "them"} VPN only` : `Close ${n === 1 ? "it" : "them"}`,
         cls: "btn-danger",
         run: () => {
-          risky.forEach((r) => setLevel(r.port, r.proto, to));
+          risky.forEach((r) => setLevel(r, to));
           render();
           L.toast("Changed here, not on the server yet. Review and apply to make it real.", "info");
         },
@@ -345,8 +413,22 @@
     box.hidden = false;
   }
 
+  // renderSummary is the one-line state under the title: how many ports, how
+  // many open to everyone, and whether IPT-Lens protects the server yet.
+  function renderSummary() {
+    const rows = allRows();
+    const open = rows.filter((r) => levelIn(base, r).level === "public").length;
+    const box = $("s-summary");
+    box.innerHTML = "";
+    const badge = L.el("span", view.configured ? "pill pill-ok" : "pill pill-muted", view.configured ? "Protected" : "Not set up yet");
+    badge.title = view.configured ? "IPT-Lens rules are active on this server" : "No IPT-Lens rules yet: every port is open";
+    box.append(badge, L.el("span", "",
+      `${rows.length} port${rows.length === 1 ? "" : "s"} · ${open} open to everyone · any other port: ${LABEL[base.default]}`));
+  }
+
   function render() {
     if (!view) return;
+    renderSummary();
     renderVerdict();
     renderVPN();
     renderRows();
@@ -443,8 +525,8 @@
   function taskLock() {
     const rows = allRows();
     const checks = rows.filter((r) => !r.locked).map((r) => {
-      const label = `<span class="mono">${r.port}${r.proto !== "tcp" ? "/" + r.proto : ""}</span> ${describe(r)}`;
-      return { r, ...check(label, PUBLIC_BY_DEFAULT.has(key(r.port, r.proto))) };
+      const label = `<span class="mono">${portLabel(r)}</span> ${describe(r)}`;
+      return { r, ...check(label, PUBLIC_BY_DEFAULT.has(`${r.port}/${r.proto}`)) };
     });
     const body = [L.el("div", "field-label", "1. Which ports stay open to everyone?")];
     checks.forEach((c) => body.push(c.node));
@@ -463,11 +545,11 @@
           if (picker && !picker.apply()) { L.toast("Choose a VPN interface or enter its subnet.", "error"); return; }
           draft.default = "vpn";
           checks.forEach(({ r, input }) => {
-            const cur = levelIn(draft, r.port, r.proto);
-            if (input.checked) setLevel(r.port, r.proto, "public");
+            const cur = levelIn(draft, r);
+            if (input.checked) setLevel(r, "public");
             // Unchecked ports follow the new default, except ones already closed to everyone.
             else if (!(cur.explicit && cur.level === "closed")) {
-              draft.ports = draft.ports.filter((p) => !(p.port === r.port && p.proto === r.proto));
+              draft.ports = draft.ports.filter((p) => key(p) !== key(r));
             }
           });
           L.closeModal();
@@ -478,31 +560,83 @@
     });
   }
 
+  // Common services, offered when adding a port so nobody has to remember numbers.
+  const PRESETS = [
+    { label: "SSH", port: 22 }, { label: "HTTP", port: 80 }, { label: "HTTPS", port: 443 },
+    { label: "DNS", port: 53, proto: "udp" }, { label: "MySQL", port: 3306 }, { label: "PostgreSQL", port: 5432 },
+    { label: "Redis", port: 6379 }, { label: "Grafana", port: 3000 }, { label: "Prometheus", port: 9090 },
+    { label: "WireGuard", port: 51820, proto: "udp" },
+    { label: "Kubernetes NodePorts", port: 30000, end: 32767 },
+  ];
+
   function taskOpen() {
     const port = L.el("input", "mono");
     port.inputMode = "numeric";
     port.placeholder = "8080";
     port.setAttribute("aria-label", "Port");
+    const end = L.el("input", "mono");
+    end.inputMode = "numeric";
+    end.placeholder = "optional";
+    end.setAttribute("aria-label", "Last port of a range");
     const proto = L.el("select");
     ["tcp", "udp"].forEach((p) => proto.append(new Option(p.toUpperCase(), p)));
     proto.setAttribute("aria-label", "Protocol");
     const who = L.el("select");
-    LEVELS.filter((l) => l !== "closed").forEach((l) => who.append(new Option(LABEL[l], l)));
+    LEVELS.forEach((l) => who.append(new Option(LABEL[l], l)));
     if (hasVPN(draft)) who.value = "vpn";
     who.setAttribute("aria-label", "Who can connect");
-    const grid = L.el("div", "s-wiz-grid");
-    const field = (label, input) => { const l = L.el("label", "", label); l.append(input); return l; };
-    grid.append(field("Port", port), field("Protocol", proto), field("Who can connect", who));
+    const note = L.el("input");
+    note.maxLength = 40;
+    note.placeholder = "e.g. Grafana for the team";
+    note.setAttribute("aria-label", "Description");
+
+    const presets = L.el("div", "s-presets");
+    presets.setAttribute("role", "group");
+    presets.setAttribute("aria-label", "Common services");
+    PRESETS.forEach((p) => {
+      const b = L.el("button", "s-chip");
+      b.type = "button";
+      b.innerHTML = `${L.esc(p.label)} <span class="tert mono">${p.port}${p.end ? "–" + p.end : ""}${p.proto === "udp" ? "/udp" : ""}</span>`;
+      b.addEventListener("click", () => {
+        port.value = String(p.port);
+        end.value = p.end ? String(p.end) : "";
+        proto.value = p.proto || "tcp";
+        if (!note.value) note.value = p.label;
+        presets.querySelectorAll(".s-chip").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+      });
+      presets.append(b);
+    });
+
+    const grid = L.el("div", "s-wiz-grid s-wiz-port");
+    const field = (label, input, cls = "") => { const l = L.el("label", cls, label); l.append(input); return l; };
+    grid.append(field("Port", port), field("To (for a range)", end), field("Protocol", proto),
+      field("Who can connect", who), field("Description", note, "span-all"));
     L.openModal({
       title: "Add a port",
-      body: [grid],
+      body: [L.el("div", "field-label", "Common services"), presets, grid],
       actions: [
         { label: "Cancel", cls: "btn-ghost", onClick: L.dismissModal },
         { label: "Continue to review", cls: "btn-primary", onClick: () => {
           const n = Number(port.value.trim());
+          const last = end.value.trim() === "" ? 0 : Number(end.value.trim());
           if (!Number.isInteger(n) || n < 1 || n > 65535) { L.toast("Port must be a number from 1 to 65535.", "error"); return; }
+          if (last && (!Number.isInteger(last) || last <= n || last > 65535)) {
+            L.toast("The range must end above its first port, at most 65535.", "error");
+            return;
+          }
           if (who.value === "vpn" && !hasVPN(draft)) { L.toast("Choose your VPN or add a trusted address first, in the box above the ports.", "error"); return; }
-          setLevel(n, proto.value, who.value);
+          const r = { port: n, proto: proto.value };
+          if (last) r.port_end = last;
+          // Overlapping entries are refused by the server; say so here instead.
+          const clash = draft.ports.find((x) => key(x) !== key(r) && x.proto === r.proto &&
+            x.port <= (last || n) && n <= (endOf(x) || x.port));
+          if (clash) {
+            L.toast(`That overlaps port ${portLabel(clash)}. Change that row, or pick ports outside it.`, "error");
+            return;
+          }
+          setLevel(r, who.value);
+          const v = note.value.trim();
+          if (v) entry(r).note = v;
           L.closeModal();
           render();
           review();
@@ -526,7 +660,10 @@
       return;
     }
     if (!res.entries.length) {
-      list.append(L.el("li", "hint", "No changes yet. Applied, confirmed and rolled-back changes are listed here."));
+      const li = L.el("li", "s-h-empty");
+      li.innerHTML = icon('<path d="M12 8v4l3 2"/><circle cx="12" cy="12" r="9"/>');
+      li.append(L.el("b", "", "No changes yet"), L.el("span", "", "Every change you apply, keep or undo shows up here."));
+      list.append(li);
       return;
     }
     res.entries.forEach((e) => {

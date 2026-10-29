@@ -24,6 +24,15 @@ real iptables and ip6tables in CI.
 
 ### Added
 
+- Ideas from Hetzner's Cloud Firewall, which is easy to read:
+  - **Port ranges** such as `30000-32767` (Kubernetes NodePorts); a single
+    port inside a range follows it, and overlapping entries are refused.
+  - **A description per port** ("Add description" under each row), kept in
+    the rule comment so it survives without a database.
+  - **Common services** in "Add a port": SSH, HTTP, HTTPS, MySQL, PostgreSQL,
+    Redis, Grafana, ... so nobody has to remember port numbers.
+  - **A one-line summary** under the title: protected or not, how many ports,
+    how many are open to everyone.
 - `scripts/lab.sh`: try IPT-Lens on a real firewall without a server. It
   builds a throwaway network namespace with an "internet" and a "VPN" path and
   sample services, so the machine's own firewall is never touched.

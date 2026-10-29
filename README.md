@@ -179,6 +179,10 @@ step with IPv4: if either fails, both roll back. ICMPv6 (needed for neighbour
 discovery) and the DHCPv6 client from link-local addresses are always allowed.
 VPN subnets are IPv4, so over IPv6 the VPN is recognised by its interface only.
 
+A port can also be a **range** (`30000-32767`) and can carry a short
+**description** ("Grafana for the team"), stored in the rule's comment. "Add a
+port" offers common services so you don't need to remember numbers.
+
 When SSH is open to everyone, one checkbox **slows down password guessing**:
 each source address gets at most 6 new connections a minute, the rest are
 dropped (`-m hashlimit`, per address).

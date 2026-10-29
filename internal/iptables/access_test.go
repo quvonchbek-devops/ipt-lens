@@ -704,3 +704,74 @@ func TestApplyAccessOnHostWithoutFilterTable(t *testing.T) {
 	}
 	mustContain(t, f.Calls(), "-t filter -I INPUT 1 -m comment --comment iptlens:jump -j IPTLENS-IN-A")
 }
+
+func rangePolicy() AccessPolicy {
+	return AccessPolicy{
+		VPN:     VPN{Ifaces: []string{"wg0"}},
+		Default: LevelClosed,
+		Ports: []PortAccess{
+			{Port: 22, Proto: "tcp", Level: LevelPublic, Note: "SSH for the team"},
+			{Port: 30000, PortEnd: 32767, Proto: "tcp", Level: LevelVPN, Note: "Kubernetes NodePorts"},
+		},
+	}
+}
+
+func TestPortRangeAndNoteRules(t *testing.T) {
+	in := strings.Join(joinRules(inputRules(rangePolicy(), false)), "\n")
+	for _, want := range []string{
+		"-i wg0 -p tcp --dport 30000:32767 -m comment --comment iptlens:port=30000-32767/tcp level=vpn note=Kubernetes NodePorts -j RETURN",
+		"-p tcp --dport 22 -m comment --comment iptlens:port=22/tcp level=public note=SSH for the team -j RETURN",
+	} {
+		if !strings.Contains(in, want) {
+			t.Errorf("missing %q in:\n%s", want, in)
+		}
+	}
+	dk := strings.Join(joinRules(dockerRules(rangePolicy(), false)), "\n")
+	if !strings.Contains(dk, "--ctorigdstport 30000:32767") {
+		t.Fatalf("container chain lacks the range:\n%s", dk)
+	}
+	got, ok := ReadAccess(mustParse(t, saveWith(rangePolicy(), "A", false)))
+	if !ok || !reflect.DeepEqual(got, rangePolicy()) {
+		t.Fatalf("ReadAccess = %+v\nwant         %+v", got, rangePolicy())
+	}
+}
+
+func TestPolicyEntryFindsRange(t *testing.T) {
+	p := rangePolicy()
+	if e, ok := p.Entry(30080, "tcp"); !ok || e.PortEnd != 32767 {
+		t.Fatalf("Entry(30080) = %+v, %v", e, ok)
+	}
+	if _, ok := p.Entry(30080, "udp"); ok {
+		t.Fatal("a tcp range matched udp")
+	}
+	if e, _ := p.Entry(22, "tcp"); e.Note != "SSH for the team" {
+		t.Fatalf("Entry(22) = %+v", e)
+	}
+}
+
+func TestRangeAndNoteValidation(t *testing.T) {
+	base := func(pa ...PortAccess) AccessPolicy {
+		return AccessPolicy{VPN: VPN{Ifaces: []string{"wg0"}}, Default: LevelPublic, Ports: pa}
+	}
+	bad := map[string]AccessPolicy{
+		"end before start": base(PortAccess{Port: 200, PortEnd: 100, Proto: "tcp", Level: LevelVPN}),
+		"end past 65535":   base(PortAccess{Port: 200, PortEnd: 70000, Proto: "tcp", Level: LevelVPN}),
+		"overlap": base(PortAccess{Port: 30000, PortEnd: 32767, Proto: "tcp", Level: LevelVPN},
+			PortAccess{Port: 30080, Proto: "tcp", Level: LevelPublic}),
+		"limit on a range": base(PortAccess{Port: 2000, PortEnd: 2010, Proto: "tcp", Level: LevelPublic, Limit: true}),
+		"quote in note":    base(PortAccess{Port: 22, Proto: "tcp", Level: LevelPublic, Note: `a"b`}),
+		"equals in note":   base(PortAccess{Port: 22, Proto: "tcp", Level: LevelPublic, Note: "a level=closed"}),
+		"newline in note":  base(PortAccess{Port: 22, Proto: "tcp", Level: LevelPublic, Note: "a\nb"}),
+		"note too long":    base(PortAccess{Port: 22, Proto: "tcp", Level: LevelPublic, Note: strings.Repeat("x", 41)}),
+	}
+	for name, p := range bad {
+		if err := p.Validate(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	ok := base(PortAccess{Port: 30000, PortEnd: 32767, Proto: "tcp", Level: LevelVPN},
+		PortAccess{Port: 30080, Proto: "udp", Level: LevelPublic, Note: "Grafana (jamoa): test-1, o‘rniga"})
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("valid policy refused: %v", err)
+	}
+}
