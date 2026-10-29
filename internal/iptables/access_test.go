@@ -268,6 +268,10 @@ func TestApplyAccessRollbackRestoresOldChain(t *testing.T) {
 	if last := calls[len(calls)-1]; last != "-t filter -X IPTLENS-IN-B" {
 		t.Fatalf("last rollback call = %q, want the new chain deleted", last)
 	}
+	// iptables refuses to delete a chain that still has rules.
+	if prev := calls[len(calls)-2]; prev != "-t filter -F IPTLENS-IN-B" {
+		t.Fatalf("rollback call before -X = %q, want the chain flushed first", prev)
+	}
 	for _, c := range calls {
 		if c == "-t filter -X IPTLENS-IN-A" {
 			t.Fatal("rollback deleted the old chain")
@@ -512,5 +516,40 @@ func TestIPv6DisabledKernelIsNotAnError(t *testing.T) {
 		if strings.HasPrefix(c, "-6 ") {
 			t.Fatalf("ip6tables called: %q", c)
 		}
+	}
+}
+
+func TestApplyAccessBuildsEachChainWithOneRestore(t *testing.T) {
+	f := installFake(t)
+	f.save = v6Base
+	f.save6 = v6Base
+	w := newTestWatchdog(t, time.Hour)
+	if err := w.ApplyAccess(samplePolicy()); err != nil {
+		t.Fatal(err)
+	}
+	// IN and DK chains, IPv4 and IPv6.
+	if len(f.restores) != 4 {
+		t.Fatalf("restores = %d, want 4: %q", len(f.restores), f.restores)
+	}
+	in := f.restores[0]
+	if !strings.HasPrefix(in, "*filter\n:IPTLENS-IN-A - [0:0]\n-A IPTLENS-IN-A ") || !strings.HasSuffix(in, "\nCOMMIT\n") {
+		t.Fatalf("restore input:\n%s", in)
+	}
+	if !strings.Contains(in, `--comment "iptlens:port=22/tcp level=public"`) {
+		t.Fatalf("comment with a space not quoted:\n%s", in)
+	}
+	if !strings.HasPrefix(f.restores[2], "-6 *filter\n") {
+		t.Fatalf("third restore is not IPv6: %q", f.restores[2])
+	}
+}
+
+func TestRestoreInputRejectsUnsafeArgs(t *testing.T) {
+	for _, bad := range []string{`a"b`, "a\nb", `a\b`, "a\rb"} {
+		if _, err := restoreInput("IPTLENS-IN-A", [][]string{{"-m", "comment", "--comment", bad, "-j", "RETURN"}}); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+	if _, err := restoreInput("IPTLENS-IN-A", [][]string{{"-p", "tcp", "--dport", "22", "-j", "RETURN"}}); err != nil {
+		t.Fatal(err)
 	}
 }

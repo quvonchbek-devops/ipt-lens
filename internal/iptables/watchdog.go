@@ -53,6 +53,14 @@ type plan struct {
 type step struct {
 	do, undo []string
 	at       *anchor // where undo re-inserts a rule; nil when undo needs no position
+	restore  []byte  // when set, the step feeds this to iptables-restore (do holds the family marker)
+}
+
+func (s step) run() ([]byte, error) {
+	if s.restore != nil {
+		return iptRestore(s.do, s.restore)
+	}
+	return ipt(s.do...)
 }
 
 // Option configures a Watchdog.
@@ -276,7 +284,7 @@ func (w *Watchdog) begin(build func() (plan, error)) error {
 	}
 
 	for i, st := range p.steps {
-		if out, err := ipt(st.do...); err != nil {
+		if out, err := st.run(); err != nil {
 			applyErr := fmt.Errorf("iptables error: %s", strings.TrimSpace(string(out)))
 			c.setUndo(p.steps[:i]) // only the steps that ran
 			if err := w.writePending(c); err != nil {

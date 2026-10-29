@@ -1,6 +1,7 @@
 package iptables
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"strings"
@@ -16,7 +17,26 @@ var (
 	runIP6T       = func(args ...string) ([]byte, error) { return exec.Command("ip6tables", args...).CombinedOutput() }
 	runSave6      = func() ([]byte, error) { return exec.Command("ip6tables-save", "-c").Output() }
 	runSaveRules6 = func() ([]byte, error) { return exec.Command("ip6tables-save").Output() }
+
+	// runRestore loads rules with iptables-restore --noflush: it changes only
+	// the chains the input names, as one atomic commit.
+	runRestore  = func(in []byte) ([]byte, error) { return restoreCmd("iptables-restore", in) }
+	runRestore6 = func(in []byte) ([]byte, error) { return restoreCmd("ip6tables-restore", in) }
 )
+
+func restoreCmd(bin string, in []byte) ([]byte, error) {
+	cmd := exec.Command(bin, "--wait=5", "--noflush")
+	cmd.Stdin = bytes.NewReader(in)
+	return cmd.CombinedOutput()
+}
+
+// iptRestore runs iptables-restore, or ip6tables-restore when fam is "-6".
+func iptRestore(fam []string, in []byte) ([]byte, error) {
+	if len(fam) > 0 && fam[0] == v6Flag {
+		return runRestore6(in)
+	}
+	return runRestore(in)
+}
 
 // ipt runs iptables and waits up to 5s for the xtables lock (Docker holds it at
 // times). A leading "-6" runs ip6tables instead; iptables itself is never

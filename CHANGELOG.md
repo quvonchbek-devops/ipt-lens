@@ -36,6 +36,10 @@ and the project uses [Semantic Versioning](https://semver.org/).
   removing the new rule and re-inserting the old one, never by `-R` at a
   position. A rule that is unique in its chain is deleted by its spec.
 - Editing a rule into one that already exists in the chain is refused.
+- The simple view builds each managed chain with one atomic
+  `iptables-restore --noflush` call instead of one `iptables` call per rule:
+  much faster on large policies, and a chain is never left half-built.
+  Requires iptables 1.6.2 or newer.
 - More of what Docker manages is locked in the Advanced view: Docker 28's new
   chains (`DOCKER-FORWARD`, `DOCKER-BRIDGE`, `DOCKER-CT`, `DOCKER-INTERNAL`),
   which `--persist-file` also leaves out, and, where Docker manages the table,

@@ -47,7 +47,7 @@ const (
 	commentMeta  = "iptlens:v1"
 	commentDef   = "iptlens:default"
 	maxVPN       = 8
-	maxPorts     = 256 // each port is a few rules, applied one iptables call at a time
+	maxPorts     = 256 // enough for any server; keeps the list and the review readable
 )
 
 // internalIfaces carry traffic from containers, pods and VMs on this host;
@@ -303,6 +303,29 @@ func otherLetter(active, prefix string) string {
 	return prefix + "A"
 }
 
+// restoreInput renders rules for chain in iptables-restore format. Arguments
+// with spaces are quoted; anything the format cannot carry safely is refused.
+// The rules come from typed policy fields, so a refusal is a bug, not input.
+func restoreInput(chain string, rules [][]string) ([]byte, error) {
+	var b strings.Builder
+	b.WriteString("*filter\n:" + chain + " - [0:0]\n")
+	for _, r := range rules {
+		b.WriteString("-A " + chain)
+		for _, a := range r {
+			if a == "" || strings.ContainsAny(a, "\"\\'\n\r\t#") {
+				return nil, fmt.Errorf("cannot pass %q to iptables-restore", a)
+			}
+			if strings.Contains(a, " ") {
+				a = `"` + a + `"`
+			}
+			b.WriteString(" " + a)
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("COMMIT\n")
+	return []byte(b.String()), nil
+}
+
 // managedPlan builds, for one parent chain, the steps that create the new
 // managed chain and switch the parent's jump to it, plus the commands that
 // remove the old chain after confirmation.
@@ -319,13 +342,14 @@ func managedPlan(tbl *Table, fam []string, parent, prefix string, rules [][]stri
 		}
 	}
 	tf := cat(fam, []string{"-t", "filter"})
-	steps := []step{{do: cat(tf, []string{"-N", next}), undo: cat(tf, []string{"-X", next})}}
-	for i, r := range rules {
-		s := step{do: cat(tf, []string{"-A", next}, r)}
-		if i == 0 {
-			s.undo = cat(tf, []string{"-F", next})
-		}
-		steps = append(steps, s)
+	fill, err := restoreInput(next, rules)
+	if err != nil {
+		return nil, nil, err
+	}
+	// The chain is filled by one atomic iptables-restore, not one call per rule.
+	steps := []step{
+		{do: cat(tf, []string{"-N", next}), undo: cat(tf, []string{"-X", next})},
+		{do: fam, restore: fill, undo: cat(tf, []string{"-F", next})},
 	}
 	// Switch by rule spec, never by position: another tool (fail2ban,
 	// kube-proxy) may insert into the parent chain during the confirm window.
@@ -371,7 +395,7 @@ func (w *Watchdog) ApplyAccess(p AccessPolicy) error {
 			if err != nil {
 				return err
 			}
-			chain := 1 + len(rules) // -N plus one step per rule; the rest switch jumps
+			const chain = 2 // -N and the restore that fills it; the rest switch jumps
 			pl.steps = append(pl.steps, steps[:chain]...)
 			jumps = append(jumps, steps[chain:]...)
 			pl.cleanup = append(pl.cleanup, clean...)

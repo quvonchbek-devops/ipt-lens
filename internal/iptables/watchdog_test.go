@@ -24,6 +24,8 @@ type fakeIPT struct {
 	// query answers read-only calls (-C, -S); they are not recorded in calls.
 	// Without it, -C finds every rule and -S lists none.
 	query func(cmd string) (string, error)
+	// restores holds every iptables-restore input, "-6 "-prefixed for IPv6.
+	restores []string
 }
 
 // exitErr is an error carrying an iptables exit status, like *exec.ExitError.
@@ -70,12 +72,38 @@ func installFake(t *testing.T) *fakeIPT {
 		return []byte(f.save6), nil
 	}
 	runSave6, runSaveRules6 = save6, save6
+	// iptables-restore is recorded as "restore" plus one call per rule line,
+	// so tests can check rules the same way for both paths. A failing line
+	// fails the whole restore, which then adds nothing (it is atomic).
+	restore := func(prefix string) func([]byte) ([]byte, error) {
+		return func(in []byte) ([]byte, error) {
+			var lines []string
+			for _, l := range strings.Split(string(in), "\n") {
+				if strings.HasPrefix(l, "-A ") {
+					lines = append(lines, prefix+"-t filter "+strings.Join(tokenizeRule(l), " "))
+				}
+			}
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			f.restores = append(f.restores, prefix+string(in))
+			for _, l := range lines {
+				if f.failOn != "" && strings.Contains(l, f.failOn) {
+					return []byte("fake failure"), errors.New("exit status 1")
+				}
+			}
+			f.calls = append(f.calls, lines...)
+			return nil, nil
+		}
+	}
+	oldRestore, oldRestore6 := runRestore, runRestore6
+	runRestore, runRestore6 = restore(""), restore("-6 ")
 	oldHave6 := haveIP6
 	haveIP6 = func() bool { return f.save6 != "" || f.fail6 }
 	t.Cleanup(func() {
 		runIPT, runSave, runSaveRules = oldIPT, oldSave, oldRules
 		runIP6T, runSave6, runSaveRules6 = oldIP6T, oldSave6, oldRules6
 		haveIP6 = oldHave6
+		runRestore, runRestore6 = oldRestore, oldRestore6
 	})
 	return f
 }

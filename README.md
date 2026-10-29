@@ -152,6 +152,10 @@ traffic comes from other hosts: on a Kubernetes node, allow node-to-node ports
 explicitly. If you have a bridge named `br-*` that connects to an outside
 network, it is trusted too; filter it in the Advanced view.
 
+An apply builds the new chain with one `iptables-restore --noflush` call, which
+loads it in a single atomic step and touches nothing else, then switches the
+jump to it. This needs iptables 1.6.2 or newer (2018, for `--wait`).
+
 IPT-Lens' own port never drops below "VPN only", and a warning appears before
 SSH or your VPN's own port (WireGuard, Tailscale, OpenVPN) leaves "Everyone".
 
