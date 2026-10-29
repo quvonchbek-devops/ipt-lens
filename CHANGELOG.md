@@ -6,6 +6,12 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0-beta.1] - 2026-10-29
+
+Beta for testing on a real server (in a VM first). The simple view gets most
+of the changes; everything that touches the firewall now also runs against
+real iptables and ip6tables in CI.
+
 ### Added
 
 - Each port in the simple view shows the program listening on it (`sshd`,
@@ -167,5 +173,6 @@ First public release.
 - The "server address" setting in the UI. The page's Content Security Policy
   always blocked requests to other servers, so it never worked.
 
-[Unreleased]: https://github.com/quvonchbek-devops/ipt-lens/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/quvonchbek-devops/ipt-lens/compare/v0.2.0-beta.1...HEAD
+[0.2.0-beta.1]: https://github.com/quvonchbek-devops/ipt-lens/compare/v0.1.0...v0.2.0-beta.1
 [0.1.0]: https://github.com/quvonchbek-devops/ipt-lens/releases/tag/v0.1.0
