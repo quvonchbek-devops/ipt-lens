@@ -19,8 +19,8 @@ unit and community docs. See [CHANGELOG.md](../CHANGELOG.md).
   first translation after English.
 - **Safer rollback (done):** rules are restored next to their old neighbors,
   and every undo is checked against the live ruleset before it runs.
-- **Protect Docker's jump rules:** treat `FORWARD -j DOCKER-USER` and similar
-  jumps that Docker manages as locked.
+- **Protect Docker's jump rules (done):** `FORWARD -j DOCKER-USER`, the newer
+  `DOCKER-*` chains and Docker's bridge rules are locked.
 - **Audit log:** an append-only record of every apply, confirm and rollback.
 - **Faster simple-view apply:** build each managed chain with one
   `iptables-restore --noflush` call instead of one `iptables` call per rule

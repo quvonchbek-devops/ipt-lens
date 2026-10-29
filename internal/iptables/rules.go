@@ -30,8 +30,16 @@ func ruleArgs(raw string) []string {
 	return toks
 }
 
+// dockerChains are the chains Docker creates. DOCKER-USER is not among them:
+// Docker leaves it to the administrator, and so do we.
+var dockerChains = map[string]bool{
+	"DOCKER": true, "DOCKER-FORWARD": true, "DOCKER-BRIDGE": true, "DOCKER-CT": true,
+	"DOCKER-INTERNAL": true, "DOCKER-INGRESS": true,
+}
+
+// protectedName reports whether a chain belongs to another tool.
 func protectedName(n string) bool {
-	if n == "DOCKER" || strings.HasPrefix(n, "DOCKER-ISOLATION") {
+	if dockerChains[n] || strings.HasPrefix(n, "DOCKER-ISOLATION") {
 		return true
 	}
 	for _, p := range []string{"KUBE-", "cali-", "LIBVIRT_", "ufw-"} {
@@ -42,10 +50,55 @@ func protectedName(n string) bool {
 	return false
 }
 
-// isProtected reports whether the chain or the rule's target belongs to
-// Docker, Kubernetes, Calico, libvirt or ufw.
-func isProtected(chain string, r *Rule) bool {
-	return protectedName(chain) || protectedName(r.Target)
+// dockerBridge matches Docker's default bridge and its per-network bridges.
+var dockerBridge = regexp.MustCompile(`^(docker0|br-[0-9a-f]{12})$`)
+
+// isProtected reports whether the rule belongs to Docker, Kubernetes, Calico,
+// libvirt or ufw: its chain or target is theirs or, where Docker manages the
+// table (docker: it holds Docker's DOCKER chain), it is Docker's jump into
+// DOCKER-USER or one of Docker's bridge rules. Docker re-creates those on
+// start; without Docker managing the table, the same rules were written by
+// hand and must stay editable and persisted.
+func isProtected(chain string, r *Rule, docker bool) bool {
+	if protectedName(chain) || protectedName(r.Target) {
+		return true
+	}
+	return docker && (r.Target == "DOCKER-USER" || dockerBridgeRule(chain, r))
+}
+
+// dockerBridgeRule matches only the exact rules Docker writes for a bridge B:
+//
+//	FORWARD -o B -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+//	FORWARD -i B ! -o B -j ACCEPT
+//	FORWARD -i B -o B -j ACCEPT|DROP   (DROP with inter-container traffic off)
+//	POSTROUTING -s <subnet> ! -o B -j MASQUERADE
+//
+// Anything more or different (another interface, a port, protocol, address,
+// comment or match) was written by hand.
+func dockerBridgeRule(chain string, r *Rule) bool {
+	anyAddr := func(a string) bool { return a == "" || a == "0.0.0.0/0" || a == "::/0" }
+	if (r.Proto != "" && r.Proto != "all") || r.SrcPort != "" || r.DstPort != "" || !anyAddr(r.Destination) ||
+		r.DstType != "" || r.Comment != "" || r.Extra != "" || len(r.Unsupported) > 0 {
+		return false
+	}
+	in, out := r.InIface, r.OutIface
+	switch chain {
+	case "FORWARD":
+		if !anyAddr(r.Source) {
+			return false
+		}
+		if r.CtState == "RELATED,ESTABLISHED" {
+			return in == "" && dockerBridge.MatchString(out) && r.Target == "ACCEPT"
+		}
+		if r.CtState != "" || !dockerBridge.MatchString(in) {
+			return false
+		}
+		return (out == "!"+in && r.Target == "ACCEPT") || (out == in && (r.Target == "ACCEPT" || r.Target == "DROP"))
+	case "POSTROUTING":
+		return r.Target == "MASQUERADE" && in == "" && strings.HasPrefix(out, "!") && dockerBridge.MatchString(out[1:]) &&
+			!anyAddr(r.Source) && !strings.HasPrefix(r.Source, "!")
+	}
+	return false
 }
 
 func checkNames(table, chain string) error {

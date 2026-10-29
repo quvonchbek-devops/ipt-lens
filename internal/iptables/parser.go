@@ -134,8 +134,9 @@ func markProtected(st *SystemState) {
 			// IPT-Lens' own chains are edited through the simple view only.
 			lens := strings.HasPrefix(name, accessPrefix)
 			c.Protected = protectedName(name) || lens
+			_, docker := t.Chains["DOCKER"]
 			for _, r := range c.Rules {
-				r.Protected = isProtected(name, r) || lens || strings.HasPrefix(r.Target, accessPrefix)
+				r.Protected = isProtected(name, r, docker) || lens || strings.HasPrefix(r.Target, accessPrefix)
 			}
 		}
 	}

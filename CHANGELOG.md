@@ -36,6 +36,13 @@ and the project uses [Semantic Versioning](https://semver.org/).
   removing the new rule and re-inserting the old one, never by `-R` at a
   position. A rule that is unique in its chain is deleted by its spec.
 - Editing a rule into one that already exists in the chain is refused.
+- More of what Docker manages is locked in the Advanced view and left out of
+  `--persist-file`: Docker 28's new chains (`DOCKER-FORWARD`, `DOCKER-BRIDGE`,
+  `DOCKER-CT`, `DOCKER-INTERNAL`) and, where Docker manages the table, the
+  `FORWARD -j DOCKER-USER` jump and the exact `FORWARD`/`POSTROUTING` rules
+  Docker writes for `docker0` and `br-<id>` bridges. Deleting the jump used to be possible and silently
+  switched off every `DOCKER-USER` rule, the simple view's included. Your own
+  rules inside `DOCKER-USER` stay editable and persisted.
 - The recovery check also refuses `-M` and abbreviations of `--modprobe`, and
   position-only undo records (`-R`, `-D <n>`) written by older versions.
 

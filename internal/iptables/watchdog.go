@@ -454,16 +454,32 @@ func resolveLinks(path string) (string, error) {
 // stripManaged drops managed chains, their rules and jumps into them from
 // iptables-save output.
 func stripManaged(save []byte) []byte {
-	var out []byte
-	for _, line := range strings.SplitAfter(string(save), "\n") {
+	lines := strings.SplitAfter(string(save), "\n")
+	// Tables where Docker manages rules: they hold its DOCKER chain.
+	docker := map[string]bool{}
+	table := ""
+	for _, line := range lines {
 		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "*") {
+			table = t[1:]
+		} else if f := strings.Fields(strings.TrimPrefix(t, ":")); strings.HasPrefix(t, ":") && len(f) > 0 && f[0] == "DOCKER" {
+			docker[table] = true
+		}
+	}
+	var out []byte
+	table = ""
+	for _, line := range lines {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "*") {
+			table = t[1:]
+		}
 		if strings.HasPrefix(t, ":") {
 			if f := strings.Fields(t[1:]); len(f) > 0 && protectedName(f[0]) {
 				continue
 			}
 		}
 		if strings.HasPrefix(t, "-A ") {
-			if chain, r, err := parseRuleLine(t); err == nil && isProtected(chain, r) {
+			if chain, r, err := parseRuleLine(t); err == nil && isProtected(chain, r, docker[table]) {
 				continue
 			}
 		}

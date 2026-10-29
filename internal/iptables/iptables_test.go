@@ -190,12 +190,29 @@ func TestSimulateFlagsMissingRequestFields(t *testing.T) {
 	}
 }
 
+func TestBridgeRulesKeptWithoutDocker(t *testing.T) {
+	// "iptables": false in daemon.json: there is no DOCKER chain, so rules
+	// with Docker's shapes were written by hand and nothing re-creates them.
+	in := "*filter\n:FORWARD DROP [0:0]\n:DOCKER-USER - [0:0]\n" +
+		"-A FORWARD -j DOCKER-USER\n-A FORWARD -i docker0 ! -o docker0 -j ACCEPT\nCOMMIT\n" +
+		"*nat\n:POSTROUTING ACCEPT [0:0]\n-A POSTROUTING -s 172.17.0.0/16 ! -o docker0 -j MASQUERADE\nCOMMIT\n"
+	if got := string(stripManaged([]byte(in))); got != in {
+		t.Fatalf("hand-written rules dropped:\n%s", got)
+	}
+	st := mustParse(t, in)
+	if st.Tables["filter"].Chains["FORWARD"].Rules[1].Protected {
+		t.Fatal("hand-written bridge rule locked on a host where Docker does not manage iptables")
+	}
+}
+
 func TestStripManaged(t *testing.T) {
 	in := "*filter\n:INPUT DROP [0:0]\n:DOCKER - [0:0]\n:DOCKER-USER - [0:0]\n" +
 		"-A INPUT -p tcp --dport 22 -j ACCEPT\n-A FORWARD -j DOCKER-USER\n-A FORWARD -o docker0 -j DOCKER\n" +
 		"-A DOCKER -d 172.18.0.4/32 -j ACCEPT\n-A DOCKER-USER -j RETURN\nCOMMIT\n"
+	// Docker re-creates its jump into DOCKER-USER on start; the chain and the
+	// administrator's rules in it are kept.
 	want := "*filter\n:INPUT DROP [0:0]\n:DOCKER-USER - [0:0]\n" +
-		"-A INPUT -p tcp --dport 22 -j ACCEPT\n-A FORWARD -j DOCKER-USER\n" +
+		"-A INPUT -p tcp --dport 22 -j ACCEPT\n" +
 		"-A DOCKER-USER -j RETURN\nCOMMIT\n"
 	if got := string(stripManaged([]byte(in))); got != want {
 		t.Fatalf("stripManaged:\n%s\nwant:\n%s", got, want)
@@ -207,5 +224,80 @@ func TestSimulateFlagsUnsimulatedTarget(t *testing.T) {
 	res := SimulatePacket(st, SimRequest{SrcIP: "1.2.3.4", DstIP: "127.0.0.1", Proto: "tcp", DstPort: "22"})
 	if !res.Uncertain {
 		t.Fatal("NFQUEUE verdict presented as certain")
+	}
+}
+
+func TestDockerManagedRulesLocked(t *testing.T) {
+	save := `*filter
+:INPUT ACCEPT [0:0]
+:FORWARD DROP [0:0]
+:DOCKER - [0:0]
+:DOCKER-USER - [0:0]
+:DOCKER-FORWARD - [0:0]
+:DOCKER-WHITELIST - [0:0]
+-A INPUT -i docker0 -j ACCEPT
+-A FORWARD -j DOCKER-USER
+-A FORWARD -j DOCKER-FORWARD
+-A FORWARD -o docker0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A FORWARD -i br-0123456789ab ! -o br-0123456789ab -j ACCEPT
+-A FORWARD -i wg0 -j ACCEPT
+-A FORWARD -i docker0 -p tcp -m tcp --dport 25 -j DROP
+-A FORWARD -i docker0 -m mac --mac-source aa:bb:cc:dd:ee:ff -j DROP
+-A FORWARD -i docker0 -m comment --comment "mine" -j DROP
+-A FORWARD -i eth0 -o docker0 -j DROP
+-A FORWARD -i docker0 -j DROP
+-A FORWARD -i docker0 -o docker0 -j DROP
+-A FORWARD -i eth0 -o docker0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A DOCKER-USER -j DOCKER-WHITELIST
+-A DOCKER-USER -s 10.0.0.0/8 -j DROP
+-A DOCKER-FORWARD -j ACCEPT
+COMMIT
+*nat
+:POSTROUTING ACCEPT [0:0]
+:DOCKER - [0:0]
+-A POSTROUTING -s 172.17.0.0/16 ! -o docker0 -j MASQUERADE
+-A POSTROUTING -o eth0 -j MASQUERADE
+-A POSTROUTING ! -o docker0 -j MASQUERADE
+COMMIT
+`
+	st, err := ParseIptablesSave(strings.NewReader(save))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, n := st.Tables["filter"], st.Tables["nat"]
+	locked := map[string]bool{
+		"FORWARD -j DOCKER-USER":                         f.Chains["FORWARD"].Rules[0].Protected,
+		"FORWARD -j DOCKER-FORWARD":                      f.Chains["FORWARD"].Rules[1].Protected,
+		"FORWARD -o docker0":                             f.Chains["FORWARD"].Rules[2].Protected,
+		"FORWARD -i br-…":                                f.Chains["FORWARD"].Rules[3].Protected,
+		"DOCKER-FORWARD chain":                           f.Chains["DOCKER-FORWARD"].Protected,
+		"POSTROUTING docker0 MASQUERADE":                 n.Chains["POSTROUTING"].Rules[0].Protected,
+		"FORWARD -i docker0 -o docker0 DROP (icc=false)": f.Chains["FORWARD"].Rules[10].Protected,
+	}
+	for what, ok := range locked {
+		if !ok {
+			t.Errorf("%s is not locked", what)
+		}
+	}
+	editable := map[string]bool{
+		"INPUT -i docker0 (written by hand)":      f.Chains["INPUT"].Rules[0].Protected,
+		"FORWARD -i wg0":                          f.Chains["FORWARD"].Rules[4].Protected,
+		"FORWARD -i docker0 --dport 25 (by hand)": f.Chains["FORWARD"].Rules[5].Protected,
+		"FORWARD -i docker0 -m mac (by hand)":     f.Chains["FORWARD"].Rules[6].Protected,
+		"FORWARD -i docker0 with a comment":       f.Chains["FORWARD"].Rules[7].Protected,
+		"DOCKER-USER chain":                       f.Chains["DOCKER-USER"].Protected,
+		"rule inside DOCKER-USER":                 f.Chains["DOCKER-USER"].Rules[1].Protected,
+		"POSTROUTING -o eth0 MASQUERADE":          n.Chains["POSTROUTING"].Rules[1].Protected,
+		"POSTROUTING ! -o docker0 without -s":     n.Chains["POSTROUTING"].Rules[2].Protected,
+		"FORWARD -i eth0 -o docker0 DROP":         f.Chains["FORWARD"].Rules[8].Protected,
+		"FORWARD -i docker0 DROP":                 f.Chains["FORWARD"].Rules[9].Protected,
+		"FORWARD -i eth0 -o docker0 ESTABLISHED":  f.Chains["FORWARD"].Rules[11].Protected,
+		"DOCKER-WHITELIST chain":                  f.Chains["DOCKER-WHITELIST"].Protected,
+		"jump to DOCKER-WHITELIST":                f.Chains["DOCKER-USER"].Rules[0].Protected,
+	}
+	for what, locked := range editable {
+		if locked {
+			t.Errorf("%s is locked but should be editable", what)
+		}
 	}
 }

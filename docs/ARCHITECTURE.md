@@ -89,7 +89,18 @@ marked `uncertain` with one warning per rule.
 
 The parser also sets `protected` on chains and rules owned by Docker,
 Kubernetes, Calico, libvirt or ufw; the server refuses to change them and the UI
-shows them locked.
+shows them locked. For Docker that is the chains it creates (`DOCKER`,
+`DOCKER-FORWARD`, `DOCKER-BRIDGE`, `DOCKER-CT`, `DOCKER-INTERNAL`,
+`DOCKER-INGRESS`, `DOCKER-ISOLATION-*`; not `DOCKER-USER` or chains you name
+`DOCKER-something`) and rules jumping into them. Where Docker manages a table
+(it holds Docker's `DOCKER` chain), the `-j DOCKER-USER` jump and the exact
+bridge rules Docker writes for `docker0` and `br-<id>` are locked too:
+`FORWARD -o B --ctstate RELATED,ESTABLISHED -j ACCEPT`, `FORWARD -i B ! -o B
+-j ACCEPT`, `FORWARD -i B -o B -j ACCEPT|DROP` and `POSTROUTING -s <subnet>
+! -o B -j MASQUERADE`. Anything else on a bridge, and all of these on a host
+where Docker does not manage iptables, counts as written by hand. The same
+test decides what `--persist-file` leaves out, since Docker writes these again
+when it starts.
 
 ## Frontend
 
