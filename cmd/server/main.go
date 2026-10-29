@@ -94,6 +94,7 @@ func main() {
 		Static:       http.FileServer(http.FS(static)),
 		TokenHint:    tokenHint,
 		LensPort:     lensPort(*listen),
+		ExtraNotes:   persistNotes(*persistFile, *persistFile6, !*demo && iptables.IPv6Available()),
 	}
 
 	httpSrv := &http.Server{
@@ -138,6 +139,14 @@ func hostAllowlist(listen, extra string) []string {
 		hosts = append(hosts, host)
 	}
 	return append(hosts, extras...)
+}
+
+// persistNotes warns when IPv4 rules are saved but IPv6 ones are not.
+func persistNotes(file4, file6 string, ipv6 bool) []string {
+	if file4 != "" && file6 == "" && ipv6 {
+		return []string{"Confirmed changes are saved for IPv4 only. Set --persist-file6 so IPv6 rules survive a reboot."}
+	}
+	return nil
 }
 
 // lensPort returns the port IPT-Lens is reachable on from other hosts, or 0

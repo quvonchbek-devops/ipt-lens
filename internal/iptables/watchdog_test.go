@@ -19,6 +19,7 @@ type fakeIPT struct {
 	onCall func(cmd string) error // optional hook, runs before the call is recorded
 	save   string
 	save6  string // empty: ip6tables is not available
+	fail6  bool   // ip6tables is installed but cannot be read
 }
 
 func installFake(t *testing.T) *fakeIPT {
@@ -46,15 +47,18 @@ func installFake(t *testing.T) *fakeIPT {
 	runSave = func() ([]byte, error) { return []byte(f.save), nil }
 	runSaveRules = func() ([]byte, error) { return []byte(f.save), nil }
 	save6 := func() ([]byte, error) {
-		if f.save6 == "" {
-			return nil, errors.New("ip6tables-save: not found")
+		if f.save6 == "" || f.fail6 {
+			return nil, errors.New("ip6tables-save failed")
 		}
 		return []byte(f.save6), nil
 	}
 	runSave6, runSaveRules6 = save6, save6
+	oldHave6 := haveIP6
+	haveIP6 = func() bool { return f.save6 != "" || f.fail6 }
 	t.Cleanup(func() {
 		runIPT, runSave, runSaveRules = oldIPT, oldSave, oldRules
 		runIP6T, runSave6, runSaveRules6 = oldIP6T, oldSave6, oldRules6
+		haveIP6 = oldHave6
 	})
 	return f
 }

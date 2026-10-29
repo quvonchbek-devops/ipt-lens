@@ -193,11 +193,14 @@ func TestAccessNotesWhenIPv6Filtered(t *testing.T) {
 	rec := do(t, newTestServer(t, ""), http.MethodGet, "/api/v1/access", "")
 	var v accessView
 	_ = json.Unmarshal(rec.Body.Bytes(), &v)
-	if !strings.Contains(v.Notes[0], "IPv6 is filtered the same way") {
+	if !strings.Contains(v.Notes[0], "applies to IPv6 too") {
 		t.Fatalf("notes = %q", v.Notes)
 	}
-	if got := ipv6Notes(false); !strings.Contains(got, "not filtered") {
+	if got := ipv6Notes(false, false, true); !strings.Contains(got, "not filtered") {
 		t.Fatalf("unavailable note = %q", got)
+	}
+	if got := ipv6Notes(true, false, true); !strings.Contains(got, "apply again") {
+		t.Fatalf("stale IPv6 note = %q", got)
 	}
 }
 
@@ -205,5 +208,13 @@ func TestAccessPreviewIPv6SubnetOnly(t *testing.T) {
 	_, p := preview(t, `{"vpn":{"ifaces":[],"subnets":["100.64.0.0/10"]},"default":"vpn","ports":[]}`)
 	if !strings.Contains(strings.Join(p.Warnings, "\n"), "Over IPv6") {
 		t.Fatalf("warnings = %q", p.Warnings)
+	}
+}
+
+func TestAccessPreviewListsIPv6Commands(t *testing.T) {
+	_, p := preview(t, `{"vpn":{"ifaces":["wg0"],"subnets":[]},"default":"vpn","ports":[]}`)
+	all := strings.Join(p.Commands, "\n")
+	if !strings.Contains(all, "ip6tables -A IPTLENS-IN -p ipv6-icmp -j RETURN") {
+		t.Fatalf("no ip6tables commands in preview:\n%s", all)
 	}
 }

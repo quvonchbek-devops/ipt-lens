@@ -46,7 +46,6 @@ type discovery struct {
 	listening []ports.Port
 	published []enricher.Published
 	vpn       []enricher.VPNIface
-	ipv6      bool
 }
 
 func (s *Server) discover() discovery {
@@ -58,11 +57,9 @@ func (s *Server) discover() discovery {
 				{Port: 3306, Proto: "tcp", Container: "mysql"}},
 			vpn: []enricher.VPNIface{{Name: "wg0", Subnets: []string{"10.8.0.0/24"}},
 				{Name: "tailscale0", Subnets: []string{"100.64.0.0/10"}}},
-			ipv6: true,
 		}
 	}
-	return discovery{listening: ports.Listening(), published: enricher.PublishedPorts(),
-		vpn: enricher.VPNInterfaces(), ipv6: s.ipv6()}
+	return discovery{listening: ports.Listening(), published: enricher.PublishedPorts(), vpn: enricher.VPNInterfaces()}
 }
 
 var levelLabel = map[iptables.Level]string{
@@ -72,16 +69,24 @@ var levelLabel = map[iptables.Level]string{
 // vpnServices are VPN endpoints: clients reach them before they are on the VPN.
 var vpnServices = map[string]bool{"WireGuard": true, "Tailscale": true, "OpenVPN": true}
 
-// ipv6Notes says whether IPv6 is covered: the policy is applied with
-// ip6tables too when it is available.
-func ipv6Notes(available bool) string {
-	if available {
-		return "IPv6 is filtered the same way. VPN subnets are IPv4 only; over IPv6 the VPN is recognised by its interface."
+// ipv6Notes says, from the live state, whether IPv6 is covered.
+func ipv6Notes(available, covered, configured bool) string {
+	switch {
+	case !available:
+		return "ip6tables is not available, so IPv6 traffic is not filtered. If this server has a public IPv6 address, protect it separately."
+	case configured && !covered:
+		return "IPv6 does not carry the current policy (it was applied before IPv6 support, changed by hand, or ip6tables " +
+			"could not be read). Review and apply again so IPv6 is covered."
 	}
-	return "ip6tables is not available, so IPv6 traffic is not filtered. If this server has a public IPv6 address, protect it separately."
+	return "The policy applies to IPv6 too. VPN subnets are IPv4 only; over IPv6 the VPN is recognised by its interface."
 }
 
-func (s *Server) ipv6() bool { return s.Demo || iptables.IPv6Available() }
+func (s *Server) ipv6Coverage(st *iptables.SystemState) (available, covered bool) {
+	if s.Demo {
+		return true, true
+	}
+	return iptables.IPv6Coverage(st)
+}
 
 // levelOf returns the effective level of a port under p, and whether p sets it
 // explicitly. An unconfigured policy (empty default) lets everything through.
@@ -126,8 +131,9 @@ func (s *Server) buildView(st *iptables.SystemState, d discovery) accessView {
 	}
 	hasChain, covered := iptables.DockerCoverage(st)
 	dn := dockerNotes(hasChain, covered || !configured, len(d.published))
+	v6, v6covered := s.ipv6Coverage(st)
 	v := accessView{Configured: configured, Policy: cur, VPNCandidates: d.vpn,
-		Notes: append([]string{ipv6Notes(d.ipv6)}, dn...), dockerNotes: dn, ipv6: d.ipv6}
+		Notes: append(append([]string{ipv6Notes(v6, v6covered, configured)}, dn...), s.ExtraNotes...), dockerNotes: dn, ipv6: v6}
 	if v.VPNCandidates == nil {
 		v.VPNCandidates = []enricher.VPNIface{}
 	}
@@ -319,12 +325,22 @@ func previewOf(cur, next iptables.AccessPolicy, rows []accessRow, ipv6 bool) acc
 		pv.Warnings = append(pv.Warnings, "Over IPv6, \"VPN only\" needs a VPN interface. With only a subnet, "+
 			"those ports are closed to everyone over IPv6.")
 	}
-	pv.Warnings = append(pv.Warnings, ipv6Notes(ipv6))
-	for _, rule := range iptables.InputRules(next) {
-		pv.Commands = append(pv.Commands, "iptables -A IPTLENS-IN "+shellJoin(rule))
+	pv.Warnings = append(pv.Warnings, ipv6Notes(ipv6, true, true)) // describes the state after applying
+	families := []bool{false}
+	if ipv6 {
+		families = append(families, true)
 	}
-	for _, rule := range iptables.DockerRules(next) {
-		pv.Commands = append(pv.Commands, "iptables -A IPTLENS-DK "+shellJoin(rule))
+	for _, v6 := range families {
+		bin := "iptables"
+		if v6 {
+			bin = "ip6tables"
+		}
+		for _, rule := range iptables.InputRules(next, v6) {
+			pv.Commands = append(pv.Commands, bin+" -A IPTLENS-IN "+shellJoin(rule))
+		}
+		for _, rule := range iptables.DockerRules(next, v6) {
+			pv.Commands = append(pv.Commands, bin+" -A IPTLENS-DK "+shellJoin(rule))
+		}
 	}
 	return pv
 }

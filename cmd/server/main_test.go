@@ -94,3 +94,14 @@ func TestLensPort(t *testing.T) {
 		}
 	}
 }
+
+func TestPersistNotes(t *testing.T) {
+	if n := persistNotes("/etc/iptables/rules.v4", "", true); len(n) != 1 || !strings.Contains(n[0], "--persist-file6") {
+		t.Fatalf("notes = %q", n)
+	}
+	for _, c := range [][3]any{{"/x", "/y", true}, {"/x", "", false}, {"", "", true}} {
+		if n := persistNotes(c[0].(string), c[1].(string), c[2].(bool)); n != nil {
+			t.Fatalf("%v: unexpected notes %q", c, n)
+		}
+	}
+}

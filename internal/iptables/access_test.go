@@ -449,3 +449,62 @@ func TestApplyAccessBacksUpIPv6(t *testing.T) {
 		t.Fatalf("ipv6 backups = %v", files)
 	}
 }
+
+func TestApplyAccessFailsWhenIPv6Unreadable(t *testing.T) {
+	f := installFake(t)
+	f.save = v6Base
+	f.fail6 = true
+	w := newTestWatchdog(t, time.Hour)
+	if err := w.ApplyAccess(samplePolicy()); err == nil || !strings.Contains(err.Error(), "IPv6") {
+		t.Fatalf("got %v, want an IPv6 error instead of silently skipping IPv6", err)
+	}
+	for _, c := range f.Calls() {
+		if strings.Contains(c, "IPTLENS") {
+			t.Fatalf("firewall changed although IPv6 could not be read: %q", c)
+		}
+	}
+}
+
+func TestIPv6Coverage(t *testing.T) {
+	f := installFake(t)
+	v4 := mustParse(t, saveWith(samplePolicy(), "A", false))
+	if avail, _ := IPv6Coverage(v4); avail {
+		t.Fatal("available without ip6tables")
+	}
+	f.save6 = v6Base
+	if avail, covered := IPv6Coverage(v4); !avail || covered {
+		t.Fatalf("v6 without managed chain: avail=%v covered=%v", avail, covered)
+	}
+	f.save6 = saveWith(samplePolicy(), "B", false)
+	if _, covered := IPv6Coverage(v4); !covered {
+		t.Fatal("same policy on IPv6 not reported as covered")
+	}
+	other := samplePolicy()
+	other.Default = LevelPublic
+	f.save6 = saveWith(other, "B", false)
+	if _, covered := IPv6Coverage(v4); covered {
+		t.Fatal("different IPv6 policy reported as covered")
+	}
+	f.fail6 = true
+	if avail, covered := IPv6Coverage(v4); !avail || covered {
+		t.Fatalf("unreadable ip6tables: avail=%v covered=%v", avail, covered)
+	}
+}
+
+func TestIPv6DisabledKernelIsNotAnError(t *testing.T) {
+	f := installFake(t)
+	f.save = v6Base
+	f.save6 = "# ip6tables-save on a kernel booted with ipv6.disable=1\n"
+	if IPv6Available() {
+		t.Fatal("no IPv6 tables, but IPv6 reported available")
+	}
+	w := newTestWatchdog(t, time.Hour)
+	if err := w.ApplyAccess(samplePolicy()); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range f.Calls() {
+		if strings.HasPrefix(c, "-6 ") {
+			t.Fatalf("ip6tables called: %q", c)
+		}
+	}
+}

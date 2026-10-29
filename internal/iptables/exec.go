@@ -30,10 +30,10 @@ func ipt(args ...string) ([]byte, error) {
 
 const v6Flag = "-6"
 
-// IPv6Available reports whether ip6tables can be read on this host.
+// IPv6Available reports whether this host has an IPv6 firewall to manage.
 func IPv6Available() bool {
-	_, err := runSave6()
-	return err == nil
+	_, present, _ := ipv6State()
+	return present
 }
 
 // bootID identifies the current boot, so a pending change recorded before a
@@ -44,4 +44,25 @@ var bootID = func() string {
 		return ""
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// haveIP6 reports whether ip6tables is installed. When it is, failing to read
+// it is an error, never a reason to leave IPv6 out.
+var haveIP6 = func() bool {
+	_, err := exec.LookPath("ip6tables-save")
+	return err == nil
+}
+
+// ipv6State returns the live ip6tables ruleset. present is false when the
+// host has no IPv6 firewall to manage: ip6tables is missing, or the kernel
+// has IPv6 disabled (ip6tables-save lists no tables).
+func ipv6State() (st *SystemState, present bool, err error) {
+	if !haveIP6() {
+		return nil, false, nil
+	}
+	st, err = currentState6()
+	if err != nil {
+		return nil, true, err
+	}
+	return st, len(st.Tables) > 0, nil
 }

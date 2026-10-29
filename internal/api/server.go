@@ -25,8 +25,9 @@ type Server struct {
 	AllowedHosts []string
 	Watch        *iptables.Watchdog
 	Static       http.Handler
-	TokenHint    string // where to find the token, sent with 401 responses
-	LensPort     int    // IPT-Lens' own port when reachable from outside; kept at least "VPN only"
+	TokenHint    string   // where to find the token, sent with 401 responses
+	LensPort     int      // IPT-Lens' own port when reachable from outside; kept at least "VPN only"
+	ExtraNotes   []string // shown in the simple view, e.g. configuration gaps found at startup
 }
 
 func (s *Server) Routes() http.Handler {

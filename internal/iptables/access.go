@@ -3,6 +3,7 @@ package iptables
 import (
 	"fmt"
 	"net"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -388,9 +389,16 @@ func (w *Watchdog) ApplyAccess(p AccessPolicy) error {
 		if err := family(tbl, nil, false); err != nil {
 			return plan{}, err
 		}
-		// IPv6 gets the same policy when ip6tables is present; without it there
-		// is nothing to filter with, and the UI says so.
-		if st6, err := currentState6(); err == nil && st6.Tables["filter"] != nil {
+		// IPv6 gets the same policy whenever the host has it. If it cannot be
+		// read, stop: applying to IPv4 alone would leave IPv6 silently open.
+		st6, present, err := ipv6State()
+		if err != nil {
+			return plan{}, fmt.Errorf("the IPv6 firewall cannot be read, so the policy cannot cover IPv6; nothing was changed: %w", err)
+		}
+		if present {
+			if st6.Tables["filter"] == nil {
+				return plan{}, fmt.Errorf("the IPv6 filter table is missing, so the policy cannot cover IPv6; nothing was changed")
+			}
 			if err := family(st6.Tables["filter"], []string{v6Flag}, true); err != nil {
 				return plan{}, err
 			}
@@ -399,6 +407,22 @@ func (w *Watchdog) ApplyAccess(p AccessPolicy) error {
 		pl.steps = append(pl.steps, jumps...)
 		return pl, nil
 	})
+}
+
+// IPv6Coverage reports whether the host has an IPv6 firewall and whether it
+// carries the same policy as IPv4 (v4 is the live IPv4 ruleset). A policy
+// applied before IPv6 support, or changed by hand, is not covered.
+func IPv6Coverage(v4 *SystemState) (available, covered bool) {
+	st6, present, err := ipv6State()
+	if err != nil {
+		return true, false
+	}
+	if !present {
+		return false, false
+	}
+	p4, ok4 := ReadAccess(v4)
+	p6, ok6 := ReadAccess(st6)
+	return true, ok4 && ok6 && reflect.DeepEqual(p4, p6)
 }
 
 // DockerCoverage reports whether DOCKER-USER exists and whether it jumps to a
@@ -413,5 +437,5 @@ func DockerCoverage(st *SystemState) (hasChain, covered bool) {
 }
 
 // InputRules and DockerRules expose the generated chains for previews.
-func InputRules(p AccessPolicy) [][]string  { return inputRules(p, false) }
-func DockerRules(p AccessPolicy) [][]string { return dockerRules(p, false) }
+func InputRules(p AccessPolicy, v6 bool) [][]string  { return inputRules(p, v6) }
+func DockerRules(p AccessPolicy, v6 bool) [][]string { return dockerRules(p, v6) }
