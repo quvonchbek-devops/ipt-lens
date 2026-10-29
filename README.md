@@ -185,6 +185,12 @@ Check the rules by hand, then delete `<state-dir>/pending.json`.
 
 Only one change can be pending at a time.
 
+Every apply, confirm and rollback (including failed ones and rollbacks at
+start) is appended to `<state-dir>/audit.log`, one JSON object per line with the
+time, what happened, the change and the commands it ran. The file is mode
+0600 and moves to `audit.log.1` once it passes 1 MiB. The simple view shows
+the latest entries under *Change history*.
+
 ## HTTP API
 
 All endpoints are under `/api/v1`, take and return JSON, and need
@@ -194,6 +200,7 @@ All endpoints are under `/api/v1`, take and return JSON, and need
 | Method | Path | Body | Purpose |
 |---|---|---|---|
 | GET | `/state` | | Ruleset, version, pending status |
+| GET | `/audit` | | The last 200 audit entries, newest first |
 | POST | `/simulate` | `src_ip, dst_ip, proto, dst_port, in_iface, out_iface, ct_state` | Trace a packet |
 | POST | `/apply` | `table, chain, position, rule` | Add a rule (`position` 0 appends) |
 | POST | `/rules/edit` | `table, chain, rule_id, expect, rule` | Replace a rule |

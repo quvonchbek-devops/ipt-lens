@@ -481,6 +481,21 @@ tbody td:nth-child(2) { white-space: nowrap; }
 #s-vpn-card.folded .s-vpn-h { grid-template-columns: auto minmax(0, 1fr) auto; }
 #s-vpn-card.folded .s-vpn-h #s-vpn-change { grid-column: 3; grid-row: 1; }
 #s-vpn-card.folded .hint { margin: 0; color: var(--vpn); font-size: 13px; }
+.s-history { color: var(--t2); font-size: 13px; }
+.s-history > summary { cursor: pointer; width: fit-content; color: var(--t2); padding: 4px 0; }
+.s-history > summary:hover { color: var(--t1); }
+.s-history-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; }
+.s-h-item {
+  --tone: var(--edit);
+  display: grid; grid-template-columns: 11.5rem minmax(0, 1fr); gap: 4px 14px;
+  padding: 8px 0 8px 12px; border-top: 1px solid var(--line); position: relative;
+}
+.s-h-item::before { content: ""; position: absolute; left: 0; top: 14px; width: 6px; height: 6px; border-radius: 50%; background: var(--tone); }
+.s-h-ok { --tone: var(--ok); } .s-h-warn { --tone: var(--warn); } .s-h-bad { --tone: var(--bad); }
+.s-h-time { color: var(--t3); font-size: 12px; }
+.s-h-what b { font-weight: 600; color: var(--t1); }
+.s-h-detail { color: var(--t3); font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
+@media (max-width: 640px) { .s-h-item { grid-template-columns: 1fr; } }
 .s-add-port { align-self: flex-start; margin-top: 4px; }
 
 .s-chips { display: flex; flex-wrap: wrap; gap: 8px; }

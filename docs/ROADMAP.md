@@ -21,7 +21,8 @@ unit and community docs. See [CHANGELOG.md](../CHANGELOG.md).
   and every undo is checked against the live ruleset before it runs.
 - **Protect Docker's jump rules (done):** `FORWARD -j DOCKER-USER`, the newer
   `DOCKER-*` chains and Docker's bridge rules are locked.
-- **Audit log:** an append-only record of every apply, confirm and rollback.
+- **Audit log (done):** an append-only record of every apply, confirm and
+  rollback, shown as *Change history* in the simple view.
 - **Faster simple-view apply (done):** each managed chain is built with one
   `iptables-restore --noflush` call.
 

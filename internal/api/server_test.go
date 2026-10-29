@@ -199,3 +199,14 @@ func TestUnauthorizedCarriesTokenHint(t *testing.T) {
 		t.Fatalf("code = %d body = %s", rec.Code, rec.Body)
 	}
 }
+
+func TestAuditEndpoint(t *testing.T) {
+	h := newTestServer(t, testToken)
+	if rec := do(t, h, http.MethodGet, "/api/v1/audit", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("no token: code = %d", rec.Code)
+	}
+	rec := do(t, h, http.MethodGet, "/api/v1/audit", "", withHeader("Authorization", "Bearer "+testToken))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"entries":[]`) {
+		t.Fatalf("code = %d body = %s", rec.Code, rec.Body)
+	}
+}

@@ -24,6 +24,7 @@ const DefaultKeepBackups = 20
 // crash or restart in the middle still rolls it back on the next start.
 type Watchdog struct {
 	mu           sync.Mutex
+	auditMu      sync.Mutex
 	dir          string
 	demo         bool
 	timeout      time.Duration
@@ -156,9 +157,11 @@ func (w *Watchdog) recover() {
 	log.Printf("found unconfirmed change (%s), rolling it back", c.Desc)
 	if err := c.rollback(); err != nil {
 		log.Printf("rollback error, leaving %s for an operator: %v", w.pendingPath(), err)
+		w.audit("rollback at start failed", c.Desc, err.Error(), nil)
 		return
 	}
 	_ = os.Remove(w.pendingPath())
+	w.audit("rolled back at start (unconfirmed before a restart)", c.Desc, "", nil)
 }
 
 // safeUndo accepts only the shapes this package writes:
@@ -293,13 +296,16 @@ func (w *Watchdog) begin(build func() (plan, error)) error {
 			if rbErr := c.rollback(); rbErr != nil {
 				// Keep pending.json: it is the only record of what is still applied.
 				log.Printf("rollback after failed apply: %v", rbErr)
+				w.audit("apply failed, rollback failed", p.desc, fmt.Sprintf("%v; %v", applyErr, rbErr), commandsOf(p.steps[:i+1]))
 				return fmt.Errorf("%w (rollback also failed: %v)", applyErr, rbErr)
 			}
 			_ = os.Remove(w.pendingPath())
+			w.audit("apply failed, rolled back", p.desc, applyErr.Error(), commandsOf(p.steps[:i+1]))
 			return applyErr
 		}
 	}
 
+	w.audit("applied", p.desc, "", commandsOf(p.steps))
 	w.pending = c
 	c.timer = time.AfterFunc(w.timeout, func() { w.expire(c) })
 	return nil
@@ -387,9 +393,11 @@ func (w *Watchdog) expire(c *change) {
 	if err := c.rollback(); err != nil {
 		// Keep pending.json: it records what may still be applied, and blocks new changes.
 		log.Printf("rollback error, leaving %s for an operator: %v", w.pendingPath(), err)
+		w.audit("rollback failed", c.Desc, err.Error(), nil)
 		return
 	}
 	_ = os.Remove(w.pendingPath())
+	w.audit("rolled back (not confirmed in time)", c.Desc, "", nil)
 }
 
 // Confirm keeps the pending change and reports whether the ruleset was saved
@@ -403,7 +411,7 @@ func (w *Watchdog) Confirm() (persisted bool, err error) {
 		return false, ErrNoPending
 	}
 	w.pending.timer.Stop()
-	cleanup := w.pending.cleanup
+	cleanup, desc := w.pending.cleanup, w.pending.Desc
 	w.pending = nil
 	_ = os.Remove(w.pendingPath())
 	for _, cmd := range cleanup {
@@ -412,6 +420,7 @@ func (w *Watchdog) Confirm() (persisted bool, err error) {
 		}
 	}
 	if w.persistFile == "" && w.persistFile6 == "" {
+		w.audit("confirmed", desc, "not saved: lasts until reboot", nil)
 		return false, nil
 	}
 	for _, f := range []struct {
@@ -422,9 +431,12 @@ func (w *Watchdog) Confirm() (persisted bool, err error) {
 			continue
 		}
 		if err := persist(f.path, f.save); err != nil {
-			return false, fmt.Errorf("change confirmed, but saving it to %s failed: %w", f.path, err)
+			err = fmt.Errorf("change confirmed, but saving it to %s failed: %w", f.path, err)
+			w.audit("confirmed", desc, err.Error(), nil)
+			return false, err
 		}
 	}
+	w.audit("confirmed", desc, "saved", nil)
 	return true, nil
 }
 

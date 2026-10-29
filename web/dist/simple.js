@@ -471,7 +471,38 @@
     });
   }
 
+  /* ---------- history ---------- */
+  // Color by outcome: failures red, rollbacks amber, confirmed green.
+  const historyTone = (ev) => /failed/.test(ev) ? "bad" : /rolled back/.test(ev) ? "warn" : ev === "confirmed" ? "ok" : "edit";
+
+  async function loadHistory() {
+    const list = $("s-history-list");
+    list.innerHTML = "";
+    let res;
+    try {
+      res = await L.api("/api/v1/audit");
+    } catch (e) {
+      list.append(L.el("li", "hint", `Could not load the history: ${e.message}`));
+      return;
+    }
+    if (!res.entries.length) {
+      list.append(L.el("li", "hint", "No changes yet. Applied, confirmed and rolled-back changes are listed here."));
+      return;
+    }
+    res.entries.forEach((e) => {
+      const li = L.el("li", `s-h-item s-h-${historyTone(e.event)}`);
+      const when = L.el("time", "s-h-time mono", new Date(e.time).toLocaleString());
+      when.dateTime = e.time;
+      const what = L.el("div", "s-h-what");
+      what.append(L.el("b", "", e.event.charAt(0).toUpperCase() + e.event.slice(1)), document.createTextNode(e.desc ? ` · ${e.desc}` : ""));
+      if (e.detail) what.append(L.el("div", "s-h-detail", e.detail));
+      li.append(when, what);
+      list.append(li);
+    });
+  }
+
   /* ---------- events ---------- */
+  $("s-history").addEventListener("toggle", () => { if ($("s-history").open) loadHistory(); });
   document.querySelectorAll(".mode-switch .seg-btn").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
   $("s-add-port").addEventListener("click", () => { if (view) taskOpen(); });
   $("s-vpn-change").addEventListener("click", () => { vpnOpen = true; render(); $("s-vpn-list").querySelector("button")?.focus(); });

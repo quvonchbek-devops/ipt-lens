@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -36,6 +37,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/api/v1/simulate", s.guard(http.MethodPost, s.handleSimulate))
 	mux.Handle("/api/v1/apply", s.guard(http.MethodPost, s.handleApply))
 	mux.Handle("/api/v1/confirm", s.guard(http.MethodPost, s.handleConfirm))
+	mux.Handle("/api/v1/audit", s.guard(http.MethodGet, s.handleAudit))
 	mux.Handle("/api/v1/rules/delete", s.guard(http.MethodPost, s.handleRuleDelete))
 	mux.Handle("/api/v1/rules/edit", s.guard(http.MethodPost, s.handleRuleEdit))
 	mux.Handle("/api/v1/access", s.guard(http.MethodGet, s.handleAccess))
@@ -201,6 +203,17 @@ func (s *Server) handleConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "confirmed", "persisted": persisted})
+}
+
+// handleAudit returns the last 200 audit entries, newest first.
+func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
+	es, err := s.Watch.Audit(200)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	slices.Reverse(es)
+	writeJSON(w, http.StatusOK, map[string]any{"entries": es})
 }
 
 type ruleRef struct {

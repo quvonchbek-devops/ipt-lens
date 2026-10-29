@@ -8,6 +8,11 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Audit log: every apply, confirm and rollback (failed ones and rollbacks at
+  start included) is appended to `<state-dir>/audit.log` as JSON lines, with
+  the commands that ran. `GET /api/v1/audit` returns the latest 200 entries,
+  and the simple view lists them under *Change history*.
+
 - The simple view opens with one answer: how exposed this server is. Ports
   that should almost never be public (databases, the Docker API, kubelet and
   etcd, Prometheus, Telnet/FTP, SMB/NFS, remote desktop) are called out as
