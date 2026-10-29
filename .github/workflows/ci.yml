@@ -31,6 +31,25 @@ jobs:
       - name: build
         run: go build ./cmd/server
 
+  # Real iptables, ip6tables and iptables-restore, as root, inside a fresh
+  # network namespace so the runner's own firewall is never touched.
+  integration:
+    name: real iptables (network namespace)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: stable
+      - name: iptables version
+        run: iptables --version && ip6tables --version
+      - name: build the test binary
+        run: go test -c -tags integration -o it.test ./internal/iptables
+      - name: run in a fresh network namespace
+        run: sudo unshare -n env IPTLENS_INTEGRATION=1 ./it.test -test.run Integration -test.v -test.count=1
+
   staticcheck:
     runs-on: ubuntu-latest
     steps:
