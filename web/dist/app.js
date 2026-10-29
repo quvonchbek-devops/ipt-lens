@@ -155,8 +155,8 @@
       const done = (val) => { tokenPromise = null; resolve(val); };
       openModal({
         title: "API token",
-        sub: "Enter the server token. It is kept only for this browser session.",
-        body: [inp],
+        sub: "The token is in IPTLENS_TOKEN, or run: sudo cat /var/lib/ipt-lens/token",
+        body: [inp, el("p", "hint", "It is kept only for this browser session.")],
         onCancel: () => done(null),
         actions: [
           { label: "Cancel", cls: "btn-ghost", onClick: dismissModal },
