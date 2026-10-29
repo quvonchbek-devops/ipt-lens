@@ -434,6 +434,40 @@ tbody td:nth-child(2) { white-space: nowrap; }
 .s-head h1 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -.02em; text-wrap: balance; }
 .s-head p { margin: 6px 0 0; color: var(--t2); font-size: 14px; max-width: 62ch; }
 
+/* The verdict: one sentence on how exposed the server is, colored by how bad. */
+.s-verdict {
+  --tone: var(--ok); --tone-bg: var(--ok-bg); --tone-line: var(--ok-line);
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 4px 16px;
+  padding: 18px 20px; border-radius: 12px; border: 1px solid var(--tone-line);
+  background: linear-gradient(var(--tone-bg), var(--tone-bg)), var(--surface);
+}
+.s-verdict[data-tone="warn"] { --tone: var(--warn); --tone-bg: var(--warn-bg); --tone-line: var(--warn-line); }
+.s-verdict[data-tone="bad"] { --tone: var(--bad); --tone-bg: var(--bad-bg); --tone-line: var(--bad-line); }
+.s-v-icon {
+  width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center;
+  color: var(--tone); background: var(--surface); box-shadow: inset 0 0 0 1px var(--tone-line);
+}
+.s-v-icon svg { width: 18px; height: 18px; }
+.s-v-main { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.s-v-title { margin: 0; font-size: 19px; line-height: 1.3; font-weight: 600; letter-spacing: -.015em; color: var(--t1); text-wrap: balance; }
+.s-verdict[data-tone="bad"] .s-v-title, .s-verdict[data-tone="warn"] .s-v-title { color: var(--tone); }
+.s-v-ports { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.s-v-ports li {
+  display: inline-flex; align-items: baseline; gap: 6px; padding: 4px 10px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--line); font-size: 13px;
+}
+.s-v-ports b { font-weight: 600; }
+.s-v-ports .mono { color: var(--t2); font-size: 12px; }
+.s-v-why { color: var(--tone); font-size: 12px; }
+.s-v-text { margin: 0; font-size: 13.5px; color: var(--t2); max-width: 64ch; }
+.s-v-draft { margin: 0; font-size: 12px; color: var(--edit); }
+.s-v-action { align-self: center; white-space: nowrap; }
+.badge-risk { color: var(--bad); background: var(--bad-bg); border-color: var(--bad-line); }
+@media (max-width: 640px) {
+  .s-verdict { grid-template-columns: auto minmax(0, 1fr); padding: 16px; }
+  .s-v-action { grid-column: 1 / -1; justify-self: stretch; margin-top: 8px; }
+}
+
 .s-card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
 .s-card-h h2 { margin: 0; font-size: 15px; font-weight: 600; }
 .s-card-h .hint { margin-top: 3px; }

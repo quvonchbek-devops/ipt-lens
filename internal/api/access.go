@@ -17,11 +17,12 @@ type accessRow struct {
 	Port       int            `json:"port"`
 	Proto      string         `json:"proto"`
 	Name       string         `json:"name"`
-	Host       bool           `json:"host"`       // a host process listens on it
-	Containers []string       `json:"containers"` // containers publishing it
-	Level      iptables.Level `json:"level"`      // effective level
-	Explicit   bool           `json:"explicit"`   // set for this port, not inherited from "everything else"
-	Locked     bool           `json:"locked"`     // IPT-Lens' own port: never below "VPN only"
+	Host       bool           `json:"host"`           // a host process listens on it
+	Containers []string       `json:"containers"`     // containers publishing it
+	Level      iptables.Level `json:"level"`          // effective level
+	Explicit   bool           `json:"explicit"`       // set for this port, not inherited from "everything else"
+	Locked     bool           `json:"locked"`         // IPT-Lens' own port: never below "VPN only"
+	Risk       string         `json:"risk,omitempty"` // why it should not be open to everyone
 }
 
 type accessView struct {
@@ -113,7 +114,8 @@ func (s *Server) buildView(st *iptables.SystemState, d discovery) accessView {
 		if r, ok := rows[k]; ok {
 			return r
 		}
-		r := &accessRow{Port: port, Proto: proto, Name: ports.Name(ports.Port{Number: port, Proto: proto}), Containers: []string{}}
+		r := &accessRow{Port: port, Proto: proto, Name: ports.Name(ports.Port{Number: port, Proto: proto}),
+			Risk: ports.Risk(ports.Port{Number: port, Proto: proto}), Containers: []string{}}
 		rows[k] = r
 		return r
 	}

@@ -35,8 +35,11 @@ func TestAccessViewDemo(t *testing.T) {
 	if r := row(22); r.Name != "SSH" || !r.Host || r.Level != iptables.LevelPublic {
 		t.Fatalf("row 22 = %+v", r)
 	}
-	if r := row(5432); !reflect.DeepEqual(r.Containers, []string{"postgres"}) {
+	if r := row(5432); !reflect.DeepEqual(r.Containers, []string{"postgres"}) || r.Risk != "database" {
 		t.Fatalf("row 5432 = %+v", r)
+	}
+	if r := row(22); r.Risk != "" {
+		t.Fatalf("SSH flagged as risky: %+v", r)
 	}
 	if len(v.VPNCandidates) == 0 || v.VPNCandidates[0].Name != "wg0" {
 		t.Fatalf("vpn candidates = %+v", v.VPNCandidates)

@@ -46,3 +46,28 @@ func TestName(t *testing.T) {
 		}
 	}
 }
+
+func TestRisk(t *testing.T) {
+	for _, c := range []struct {
+		p    Port
+		want string
+	}{
+		{Port{3306, "tcp"}, "database"},
+		{Port{6379, "tcp"}, "database"},
+		{Port{2375, "tcp"}, "controls Docker as root"},
+		{Port{23, "tcp"}, "sends passwords unencrypted"},
+		{Port{3389, "tcp"}, "remote desktop"},
+		{Port{22, "tcp"}, ""},
+		{Port{443, "tcp"}, ""},
+		{Port{3306, "udp"}, ""},
+	} {
+		if got := Risk(c.p); got != c.want {
+			t.Errorf("Risk(%v) = %q, want %q", c.p, got, c.want)
+		}
+	}
+	for p := range risks {
+		if Name(p) == "" {
+			t.Errorf("risky port %v has no name", p)
+		}
+	}
+}

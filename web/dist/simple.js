@@ -22,6 +22,11 @@
     vpn: icon('<path d="M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6Z"/>'),
     closed: icon('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'),
   };
+  const VERDICT_ICON = {
+    bad: icon('<path d="M12 3 2 20h20Z"/><path d="M12 10v4M12 17h.01"/>'),
+    warn: LEVEL_ICON.public,
+    ok: icon('<path d="M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6Z"/><path d="m9 12 2 2 4-4"/>'),
+  };
   const PUBLIC_BY_DEFAULT = new Set(["22/tcp", "80/tcp", "443/tcp", "51820/udp", "41641/udp", "1194/udp"]);
 
   let view = null; // last GET /api/v1/access
@@ -132,9 +137,12 @@
     return group;
   }
 
-  function describe(r) {
-    const title = r.name || (r.containers.length ? r.containers[0] : r.host ? "Unknown service" : "Custom port");
+  const titleOf = (r) => r.name || (r.containers.length ? r.containers[0] : r.host ? "Unknown service" : "Custom port");
+
+  function describe(r, exposed = false) {
+    const title = titleOf(r);
     const tags = [];
+    if (exposed && r.risk) tags.push(`<span class="badge badge-risk">risky: ${L.esc(r.risk)}</span>`);
     if (r.host) tags.push(`<span class="badge badge-iface">this server</span>`);
     r.containers.forEach((c) => tags.push(`<span class="badge badge-docker">container: ${L.esc(c)}</span>`));
     if (r.locked) tags.push(`<span class="badge badge-vpn">IPT-Lens</span>`);
@@ -191,7 +199,7 @@
       const port = L.el("div", "s-port mono", String(r.port));
       if (r.proto !== "tcp") port.append(L.el("span", "s-proto", "/" + r.proto));
       const what = L.el("div", "s-what");
-      what.innerHTML = describe(r);
+      what.innerHTML = describe(r, cur.level === "public");
       const sentence = L.el("div", "s-sentence", SENTENCE[cur.level]);
       if (!cur.explicit) sentence.append(L.el("span", "tert", " Follows “Everything else”."));
       what.append(sentence);
@@ -216,8 +224,77 @@
     }));
   }
 
+  // The answer to "is this server safe?" in one sentence, for the draft as it
+  // stands, with one button that fixes the worst problem.
+  function renderVerdict() {
+    const box = $("s-verdict");
+    const open = allRows().filter((r) => levelIn(draft, r.port, r.proto).level === "public");
+    const risky = open.filter((r) => r.risk);
+    const portList = (rows, withRisk) => {
+      const ul = L.el("ul", "s-v-ports");
+      rows.forEach((r) => {
+        const li = L.el("li");
+        li.innerHTML = `<b>${L.esc(titleOf(r))}</b> <span class="mono">${r.port}${r.proto !== "tcp" ? "/" + r.proto : ""}</span>`
+          + (withRisk ? ` <span class="s-v-why">${L.esc(r.risk)}</span>` : "");
+        ul.append(li);
+      });
+      return ul;
+    };
+    let tone, title, body = [], action = null;
+    if (risky.length) {
+      tone = "bad";
+      const n = risky.length;
+      title = n === 1 ? "1 risky port is open to the whole internet" : `${n} risky ports are open to the whole internet`;
+      body.push(portList(risky, true));
+      const to = hasVPN(draft) ? "vpn" : "closed";
+      body.push(L.el("p", "s-v-text", to === "vpn"
+        ? `Make ${n === 1 ? "it" : "them"} VPN only: you keep access through ${vpnText(draft)}, nobody else gets in.`
+        : `Close ${n === 1 ? "it" : "them"} to everyone. To keep access for yourself, choose your VPN below first.`));
+      action = {
+        label: to === "vpn" ? `Make ${n === 1 ? "it" : "them"} VPN only` : `Close ${n === 1 ? "it" : "them"}`,
+        cls: "btn-danger",
+        run: () => {
+          risky.forEach((r) => setLevel(r.port, r.proto, to));
+          render();
+          L.toast("Changed here, not on the server yet. Review and apply to make it real.", "info");
+        },
+      };
+    } else if (draft.default === "public") {
+      tone = "warn";
+      title = "Every new service will be open to the whole internet";
+      if (open.length) {
+        body.push(L.el("p", "s-v-text", "Open to everyone right now:"), portList(open, false));
+      }
+      body.push(L.el("p", "s-v-text", "“Everything else” is set to Everyone, so any port that starts listening later is public too."));
+      action = { label: "Lock the server behind the VPN", cls: "btn-primary", run: taskLock };
+    } else {
+      tone = "ok";
+      title = open.length ? "Only these are open to everyone" : "Nothing is open to everyone";
+      if (open.length) body.push(portList(open, false));
+      body.push(L.el("p", "s-v-text", draft.default === "vpn"
+        ? "Every other port is VPN only."
+        : "Every other port is closed."));
+    }
+    box.dataset.tone = tone;
+    box.innerHTML = "";
+    const mark = L.el("div", "s-v-icon");
+    mark.innerHTML = VERDICT_ICON[tone];
+    const main = L.el("div", "s-v-main");
+    main.append(L.el("h2", "s-v-title", title), ...body);
+    if (changeCount() > 0) main.append(L.el("p", "s-v-draft", "Includes changes you have not applied yet."));
+    box.append(mark, main);
+    if (action) {
+      const b = L.el("button", `btn ${action.cls} s-v-action`, action.label);
+      b.type = "button";
+      b.addEventListener("click", action.run);
+      box.append(b);
+    }
+    box.hidden = false;
+  }
+
   function render() {
     if (!view) return;
+    renderVerdict();
     renderVPN();
     renderRows();
     $("s-notes").textContent = (view.notes || []).join(" ");

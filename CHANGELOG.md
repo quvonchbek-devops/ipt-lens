@@ -6,6 +6,14 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- The simple view opens with one answer: how exposed this server is. Ports
+  that should almost never be public (databases, the Docker API, kubelet and
+  etcd, Prometheus, Telnet/FTP, SMB/NFS, remote desktop) are called out as
+  risky, with one button that makes them VPN only (or closes them when no VPN
+  is chosen). The change goes through the usual review and confirm steps.
+
 ### Changed
 
 - Safer rollback. Every undo command is checked against the live ruleset

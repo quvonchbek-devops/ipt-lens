@@ -102,7 +102,27 @@ var names = map[Port]string{
 	{8090, "tcp"}: "IPT-Lens", {9090, "tcp"}: "Prometheus", {9100, "tcp"}: "Node exporter", {9200, "tcp"}: "Elasticsearch",
 	{10250, "tcp"}: "Kubelet", {11211, "tcp"}: "Memcached", {27017, "tcp"}: "MongoDB", {41641, "udp"}: "Tailscale",
 	{51820, "udp"}: "WireGuard",
+	{23, "tcp"}:    "Telnet", {445, "tcp"}: "Windows file sharing (SMB)", {1433, "tcp"}: "SQL Server",
+	{2379, "tcp"}: "etcd", {3389, "tcp"}: "Remote Desktop", {5900, "tcp"}: "VNC", {5984, "tcp"}: "CouchDB",
+	{9042, "tcp"}: "Cassandra", {15672, "tcp"}: "RabbitMQ admin",
 }
+
+// risks holds ports that should almost never be open to the whole internet,
+// each with the reason in a few plain words.
+var risks = map[Port]string{
+	{3306, "tcp"}: "database", {5432, "tcp"}: "database", {6379, "tcp"}: "database", {27017, "tcp"}: "database",
+	{11211, "tcp"}: "database", {9200, "tcp"}: "database", {1433, "tcp"}: "database", {5984, "tcp"}: "database",
+	{9042, "tcp"}: "database", {5672, "tcp"}: "message queue", {15672, "tcp"}: "admin panel",
+	{2375, "tcp"}: "controls Docker as root", {2376, "tcp"}: "controls Docker as root",
+	{10250, "tcp"}: "controls the cluster", {2379, "tcp"}: "controls the cluster",
+	{9090, "tcp"}: "shows server internals", {9100, "tcp"}: "shows server internals",
+	{21, "tcp"}: "sends passwords unencrypted", {23, "tcp"}: "sends passwords unencrypted",
+	{445, "tcp"}: "file sharing", {2049, "tcp"}: "file sharing",
+	{3389, "tcp"}: "remote desktop", {5900, "tcp"}: "remote desktop",
+}
+
+// Risk returns why p should not be open to everyone, or "" if it may be.
+func Risk(p Port) string { return risks[p] }
 
 // Name returns a well-known service name for p, or "".
 func Name(p Port) string { return names[p] }
