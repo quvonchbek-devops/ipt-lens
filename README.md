@@ -174,8 +174,9 @@ Without `ip6tables`, the UI says plainly that IPv6 is not filtered.
 2. A full `iptables-save` snapshot is written to `--state-dir` (the newest 20 are kept).
 3. The change and its undo are written to `pending.json`.
 4. The change is applied. If a step fails, the steps already applied are undone.
-5. A timer starts. **Confirm** keeps the change, and saves it to `--persist-file`
-   if one is set. If the timer runs out, the undo runs.
+5. A timer starts. **Keep this change** confirms it, and saves it to
+   `--persist-file` if one is set. **Undo now**, or the timer running out, runs
+   the undo.
 6. On start, a leftover `pending.json` from the same boot means the last change was
    never confirmed, so it is rolled back. After a reboot it is discarded, since
    the kernel ruleset was rebuilt.
@@ -201,6 +202,7 @@ All endpoints are under `/api/v1`, take and return JSON, and need
 |---|---|---|---|
 | GET | `/state` | | Ruleset, version, pending status |
 | GET | `/audit` | | The last 200 audit entries, newest first |
+| POST | `/rollback` | | Undo the pending change now |
 | POST | `/simulate` | `src_ip, dst_ip, proto, dst_port, in_iface, out_iface, ct_state` | Trace a packet |
 | POST | `/apply` | `table, chain, position, rule` | Add a rule (`position` 0 appends) |
 | POST | `/rules/edit` | `table, chain, rule_id, expect, rule` | Replace a rule |

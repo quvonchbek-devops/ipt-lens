@@ -12,7 +12,7 @@ var (
 	ErrInvalid   = errors.New("invalid request")
 	ErrDemo      = errors.New("the firewall cannot be changed in demo mode")
 	ErrPending   = errors.New("the previous change has not been confirmed yet")
-	ErrNoPending = errors.New("there is no change to confirm")
+	ErrNoPending = errors.New("there is no pending change")
 	ErrDuplicate = errors.New("this rule already exists")
 )
 

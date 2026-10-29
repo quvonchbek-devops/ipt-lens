@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -510,5 +511,48 @@ func TestPersistFollowsSymlinkChain(t *testing.T) {
 	}
 	if _, err := os.Stat(final); err != nil {
 		t.Fatal("final target not written")
+	}
+}
+
+func TestRollbackNow(t *testing.T) {
+	f := installFake(t)
+	w := newTestWatchdog(t, time.Hour)
+	if err := w.begin(twoStepPlan); err != nil {
+		t.Fatal(err)
+	}
+	n := len(f.Calls())
+	if err := w.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"-t filter -D INPUT -j DROP", "-t filter -D INPUT -j ACCEPT"}
+	if got := f.Calls()[n:]; !slices.Equal(got, want) {
+		t.Fatalf("undo = %q, want %q", got, want)
+	}
+	if pending, _ := w.Status(); pending {
+		t.Fatal("still pending after rollback")
+	}
+	if _, err := os.Stat(w.pendingPath()); !os.IsNotExist(err) {
+		t.Fatal("pending.json not removed")
+	}
+	if es, _ := w.Audit(1); len(es) != 1 || es[0].Event != "undone by hand" {
+		t.Fatalf("audit = %+v", es)
+	}
+	if err := w.Rollback(); !errors.Is(err, ErrNoPending) {
+		t.Fatalf("second rollback: %v, want ErrNoPending", err)
+	}
+}
+
+func TestRollbackNowFailureKeepsRecord(t *testing.T) {
+	f := installFake(t)
+	w := newTestWatchdog(t, time.Hour)
+	if err := w.begin(twoStepPlan); err != nil {
+		t.Fatal(err)
+	}
+	f.failOn = "-D INPUT"
+	if err := w.Rollback(); err == nil {
+		t.Fatal("expected an error")
+	}
+	if _, err := os.Stat(w.pendingPath()); err != nil {
+		t.Fatal("pending.json removed although the undo failed")
 	}
 }

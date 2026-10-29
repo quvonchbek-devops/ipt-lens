@@ -1,6 +1,8 @@
 package ports
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -69,5 +71,55 @@ func TestRisk(t *testing.T) {
 		if Name(p) == "" {
 			t.Errorf("risky port %v has no name", p)
 		}
+	}
+}
+
+func TestPrograms(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, data string) {
+		t.Helper()
+		p := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sock := func(pid, fd, target string) {
+		t.Helper()
+		dir := filepath.Join(root, pid, "fd")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(dir, fd)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("net/tcp", procTCP)
+	write("net/tcp6", procTCP6)
+	write("net/udp", procUDP)
+	write("100/comm", "sshd\n")
+	sock("100", "3", "socket:[1]") // 0.0.0.0:22
+	write("200/comm", "nginx\n")
+	sock("200", "4", "socket:[3]") // 10.0.8.10:80
+	sock("200", "5", "socket:[5]") // [::]:443
+	sock("200", "6", "/dev/null")
+	write("300/comm", "docker-proxy\n")
+	sock("300", "3", "socket:[7]") // 0.0.0.0:51820/udp, a container's port
+	write("400/comm", "bad\x1b[31mname\n")
+	sock("400", "3", "socket:[2]") // loopback-only 8080: not listed
+	write("self/comm", "ignored\n")
+
+	got := programsIn(root)
+	want := map[Port]string{{22, "tcp"}: "sshd", {80, "tcp"}: "nginx", {443, "tcp"}: "nginx"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestCleanComm(t *testing.T) {
+	if got := cleanComm("bad\x1b[31mname\n"); got != "bad[31mname" {
+		t.Fatalf("cleanComm = %q", got)
 	}
 }

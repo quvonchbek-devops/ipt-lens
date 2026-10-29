@@ -8,6 +8,12 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Each port in the simple view shows the program listening on it (`sshd`,
+  `nginx`, ...), read from `/proc/<pid>/fd` and `/proc/<pid>/comm`.
+- **Undo now** next to **Keep this change** (the confirm button, renamed):
+  undoes a pending change at once instead of waiting for the timer.
+  `POST /api/v1/rollback`.
+
 - Audit log: every apply, confirm and rollback (failed ones and rollbacks at
   start included) is appended to `<state-dir>/audit.log` as JSON lines, with
   the commands that ran. `GET /api/v1/audit` returns the latest 200 entries,

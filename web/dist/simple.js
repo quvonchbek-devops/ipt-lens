@@ -135,11 +135,13 @@
     return group;
   }
 
-  const titleOf = (r) => r.name || (r.containers.length ? r.containers[0] : r.host ? "Unknown service" : "Custom port");
+  const titleOf = (r) => r.name || r.program || (r.containers.length ? r.containers[0] : r.host ? "Unknown service" : "Custom port");
 
   function describe(r, exposed = false) {
     const title = titleOf(r);
     const tags = [];
+    // The program, when the name above is the service rather than the program.
+    if (r.program && r.name) tags.push(`<span class="s-prog mono" title="The program listening on this port">${L.esc(r.program)}</span>`);
     if (exposed && r.risk) tags.push(`<span class="badge badge-risk">risky: ${L.esc(r.risk)}</span>`);
     r.containers.forEach((c) => tags.push(`<span class="badge badge-docker">container: ${L.esc(c)}</span>`));
     if (r.locked) tags.push(`<span class="badge badge-vpn">IPT-Lens</span>`);
@@ -334,7 +336,7 @@
     (pv.notes || []).forEach((n) => body.push(L.el("div", "s-note", n)));
     const det = L.el("details", "s-cmds");
     det.append(L.el("summary", "", "Show iptables commands"), L.el("pre", "code-block mono", pv.commands.join("\n")));
-    body.push(det, L.el("p", "hint", "The change is temporary until you confirm it in the yellow bar. If you lose access, it rolls back on its own."));
+    body.push(det, L.el("p", "hint", "The change stays temporary until you press “Keep this change”. If you lose access, it is undone on its own."));
     L.openModal({
       title: "Review changes",
       body,
@@ -348,7 +350,7 @@
   async function apply() {
     try {
       await L.api("/api/v1/access/apply", { method: "POST", body: JSON.stringify(draft) });
-      L.toast("Applied. Confirm it in the yellow bar, or it is rolled back automatically.", "info");
+      L.toast("Applied for now. Press “Keep this change” in the yellow bar, or it is undone on its own.", "info");
       await load();
     } catch (e) {
       L.toast(e.message, "error");
@@ -516,6 +518,7 @@
   $("s-discard").addEventListener("click", () => { draft = clone(base); render(); });
   $("s-review").addEventListener("click", review);
   $("btn-confirm").addEventListener("click", () => setTimeout(load, 600));
+  $("btn-undo").addEventListener("click", () => setTimeout(load, 600));
 
   let mode = "simple";
   try { mode = localStorage.getItem(MODE_KEY) || "simple"; } catch { /* storage unavailable */ }

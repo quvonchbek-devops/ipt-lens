@@ -17,12 +17,13 @@ type accessRow struct {
 	Port       int            `json:"port"`
 	Proto      string         `json:"proto"`
 	Name       string         `json:"name"`
-	Host       bool           `json:"host"`           // a host process listens on it
-	Containers []string       `json:"containers"`     // containers publishing it
-	Level      iptables.Level `json:"level"`          // effective level
-	Explicit   bool           `json:"explicit"`       // set for this port, not inherited from "everything else"
-	Locked     bool           `json:"locked"`         // IPT-Lens' own port: never below "VPN only"
-	Risk       string         `json:"risk,omitempty"` // why it should not be open to everyone
+	Host       bool           `json:"host"`              // a host process listens on it
+	Containers []string       `json:"containers"`        // containers publishing it
+	Level      iptables.Level `json:"level"`             // effective level
+	Explicit   bool           `json:"explicit"`          // set for this port, not inherited from "everything else"
+	Locked     bool           `json:"locked"`            // IPT-Lens' own port: never below "VPN only"
+	Risk       string         `json:"risk,omitempty"`    // why it should not be open to everyone
+	Program    string         `json:"program,omitempty"` // the process listening on it, e.g. nginx
 }
 
 type accessView struct {
@@ -46,6 +47,7 @@ type accessPreview struct {
 // ports and VPN-like interfaces.
 type discovery struct {
 	listening []ports.Port
+	programs  map[ports.Port]string
 	published []enricher.Published
 	vpn       []enricher.VPNIface
 }
@@ -55,13 +57,16 @@ func (s *Server) discover() discovery {
 		return discovery{
 			listening: []ports.Port{{Number: 22, Proto: "tcp"}, {Number: 80, Proto: "tcp"}, {Number: 443, Proto: "tcp"},
 				{Number: 8090, Proto: "tcp"}, {Number: 51820, Proto: "udp"}},
+			programs: map[ports.Port]string{{Number: 22, Proto: "tcp"}: "sshd", {Number: 80, Proto: "tcp"}: "nginx",
+				{Number: 443, Proto: "tcp"}: "nginx", {Number: 8090, Proto: "tcp"}: "ipt-lens"},
 			published: []enricher.Published{{Port: 5432, Proto: "tcp", Container: "postgres"},
 				{Port: 3306, Proto: "tcp", Container: "mysql"}},
 			vpn: []enricher.VPNIface{{Name: "wg0", Subnets: []string{"10.8.0.0/24"}},
 				{Name: "tailscale0", Subnets: []string{"100.64.0.0/10"}}},
 		}
 	}
-	return discovery{listening: ports.Listening(), published: enricher.PublishedPorts(), vpn: enricher.VPNInterfaces()}
+	return discovery{listening: ports.Listening(), programs: ports.Programs(), published: enricher.PublishedPorts(),
+		vpn: enricher.VPNInterfaces()}
 }
 
 var levelLabel = map[iptables.Level]string{
@@ -120,7 +125,9 @@ func (s *Server) buildView(st *iptables.SystemState, d discovery) accessView {
 		return r
 	}
 	for _, l := range d.listening {
-		row(l.Number, l.Proto).Host = true
+		r := row(l.Number, l.Proto)
+		r.Host = true
+		r.Program = d.programs[l]
 	}
 	for _, p := range d.published {
 		r := row(p.Port, p.Proto)

@@ -31,8 +31,9 @@
   <div id="mock-strip" class="strip" hidden>Demo mode: sample data, not a real firewall</div>
 
   <div id="banner" class="banner" hidden>
-    <span class="banner-text">A change is applied temporarily. Confirm within <b class="mono" id="wd-timer">60</b> seconds, or it is rolled back automatically.</span>
-    <button id="btn-confirm" class="btn btn-warn btn-sm">Confirm change</button>
+    <span class="banner-text">Change applied for now. Can you still reach the server? Keep it within <b class="mono" id="wd-timer">60</b> seconds, or it is undone on its own.</span>
+    <button id="btn-undo" class="btn btn-ghost btn-sm" type="button">Undo now</button>
+    <button id="btn-confirm" class="btn btn-warn btn-sm" type="button">Keep this change</button>
   </div>
 
   <main id="simple" class="simple" hidden>
@@ -88,7 +89,7 @@
         <ul>
           <li><b>INPUT</b>: traffic to the server itself (SSH, this panel).</li>
           <li><b>DOCKER-USER</b>: traffic forwarded to Docker containers.</li>
-          <li>Every change is temporary at first. Press <b>Confirm change</b> in the yellow bar to keep it; otherwise it is rolled back.</li>
+          <li>Every change is temporary at first. Press <b>Keep this change</b> in the yellow bar to keep it, or <b>Undo now</b>; otherwise it is undone on its own.</li>
           <li>Rules with a lock are managed by Docker, Kubernetes, libvirt or ufw and cannot be changed here.</li>
         </ul>
       </details>

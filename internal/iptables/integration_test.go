@@ -155,6 +155,17 @@ func TestIntegrationAccessApplyRollbackConfirm(t *testing.T) {
 		t.Fatalf("IPv6 not restored:\n%s\nwant:\n%s", got, before6)
 	}
 
+	// "Undo now" restores it just the same.
+	if err := w.ApplyAccess(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if live(t, false) != before || live(t, true) != before6 {
+		t.Fatal("Rollback did not restore the ruleset")
+	}
+
 	// Apply, confirm, then change it: the second apply builds the B chains,
 	// and confirming it removes the A chains.
 	if err := w.ApplyAccess(p); err != nil {

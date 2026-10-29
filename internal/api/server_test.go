@@ -210,3 +210,11 @@ func TestAuditEndpoint(t *testing.T) {
 		t.Fatalf("code = %d body = %s", rec.Code, rec.Body)
 	}
 }
+
+func TestRollbackEndpoint(t *testing.T) {
+	h := newTestServer(t, "")
+	rec := do(t, h, http.MethodPost, "/api/v1/rollback", "{}")
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "no pending change") {
+		t.Fatalf("code = %d body = %s", rec.Code, rec.Body)
+	}
+}

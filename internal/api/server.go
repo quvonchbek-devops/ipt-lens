@@ -37,6 +37,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/api/v1/simulate", s.guard(http.MethodPost, s.handleSimulate))
 	mux.Handle("/api/v1/apply", s.guard(http.MethodPost, s.handleApply))
 	mux.Handle("/api/v1/confirm", s.guard(http.MethodPost, s.handleConfirm))
+	mux.Handle("/api/v1/rollback", s.guard(http.MethodPost, s.handleRollback))
 	mux.Handle("/api/v1/audit", s.guard(http.MethodGet, s.handleAudit))
 	mux.Handle("/api/v1/rules/delete", s.guard(http.MethodPost, s.handleRuleDelete))
 	mux.Handle("/api/v1/rules/edit", s.guard(http.MethodPost, s.handleRuleEdit))
@@ -203,6 +204,14 @@ func (s *Server) handleConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "confirmed", "persisted": persisted})
+}
+
+func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
+	if err := s.Watch.Rollback(); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "rolled back"})
 }
 
 // handleAudit returns the last 200 audit entries, newest first.

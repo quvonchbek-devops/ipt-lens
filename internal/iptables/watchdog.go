@@ -400,6 +400,27 @@ func (w *Watchdog) expire(c *change) {
 	w.audit("rolled back (not confirmed in time)", c.Desc, "", nil)
 }
 
+// Rollback undoes the pending change now, without waiting for the timer. If
+// the undo fails, the record stays and blocks new changes, as on expiry.
+func (w *Watchdog) Rollback() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	c := w.pending
+	if c == nil {
+		return ErrNoPending
+	}
+	c.timer.Stop()
+	w.pending = nil
+	if err := c.rollback(); err != nil {
+		log.Printf("rollback error, leaving %s for an operator: %v", w.pendingPath(), err)
+		w.audit("rollback failed", c.Desc, err.Error(), nil)
+		return fmt.Errorf("undo failed, the rules may be half restored; see %s: %w", w.pendingPath(), err)
+	}
+	_ = os.Remove(w.pendingPath())
+	w.audit("undone by hand", c.Desc, "", nil)
+	return nil
+}
+
 // Confirm keeps the pending change and reports whether the ruleset was saved
 // to the persist file. A save failure is returned, but the change stays
 // confirmed in the running firewall. The lock is held while saving so that no

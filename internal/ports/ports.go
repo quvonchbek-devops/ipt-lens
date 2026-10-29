@@ -7,9 +7,12 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 type Port struct {
@@ -17,21 +20,101 @@ type Port struct {
 	Proto  string `json:"proto"`
 }
 
-// Listening returns tcp and udp ports bound to a non-loopback address, read
-// from /proc/net. Errors (e.g. no IPv6) just leave that file out.
-func Listening() []Port {
-	var out []Port
-	for file, proto := range map[string]string{
-		"/proc/net/tcp": "tcp", "/proc/net/tcp6": "tcp", "/proc/net/udp": "udp", "/proc/net/udp6": "udp",
-	} {
-		f, err := os.Open(file)
+var procFiles = map[string]string{"net/tcp": "tcp", "net/tcp6": "tcp", "net/udp": "udp", "net/udp6": "udp"}
+
+// socket is a listening socket and its inode, which links it to a process.
+type socket struct {
+	Port
+	inode string
+}
+
+// sockets reads every listening socket under root (normally /proc). Errors
+// (e.g. no IPv6) just leave that file out.
+func sockets(root string) []socket {
+	var out []socket
+	for file, proto := range procFiles {
+		f, err := os.Open(filepath.Join(root, file))
 		if err != nil {
 			continue
 		}
-		out = append(out, parse(f, proto)...)
+		out = append(out, parseSockets(f, proto)...)
 		f.Close()
 	}
+	return out
+}
+
+// Listening returns tcp and udp ports bound to a non-loopback address.
+func Listening() []Port {
+	var out []Port
+	for _, s := range sockets("/proc") {
+		out = append(out, s.Port)
+	}
 	return Dedupe(out)
+}
+
+// Programs returns the name of the program listening on each port.
+func Programs() map[Port]string { return programsIn("/proc") }
+
+// programsIn links listening sockets to processes through /proc/<pid>/fd and
+// names them by /proc/<pid>/comm. It only reads; ports that Docker's proxy
+// holds belong to containers, which are named elsewhere.
+func programsIn(root string) map[Port]string {
+	byInode := map[string]Port{}
+	for _, s := range sockets(root) {
+		byInode[s.inode] = s.Port
+	}
+	out := map[Port]string{}
+	procs, _ := os.ReadDir(root)
+	for _, pe := range procs {
+		if _, err := strconv.Atoi(pe.Name()); err != nil {
+			continue
+		}
+		fds, err := os.ReadDir(filepath.Join(root, pe.Name(), "fd"))
+		if err != nil {
+			continue
+		}
+		comm := ""
+		for _, fd := range fds {
+			link, err := os.Readlink(filepath.Join(root, pe.Name(), "fd", fd.Name()))
+			if err != nil || !strings.HasPrefix(link, "socket:[") {
+				continue
+			}
+			p, ok := byInode[strings.TrimSuffix(strings.TrimPrefix(link, "socket:["), "]")]
+			if !ok {
+				continue
+			}
+			if comm == "" {
+				b, _ := os.ReadFile(filepath.Join(root, pe.Name(), "comm"))
+				if comm = cleanComm(string(b)); comm == "" {
+					break
+				}
+			}
+			if comm == "docker-proxy" {
+				break
+			}
+			switch prev := out[p]; {
+			case prev == "":
+				out[p] = comm
+			case !slices.Contains(strings.Split(prev, ", "), comm):
+				out[p] = prev + ", " + comm
+			}
+		}
+	}
+	return out
+}
+
+// cleanComm keeps the printable part of a process name.
+func cleanComm(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsPrint(r) {
+			return r
+		}
+		return -1
+	}, strings.TrimSpace(s))
+	if len(s) > 32 {
+		s = s[:32]
+	}
+	return s
 }
 
 // listenState is the socket state of a listening tcp socket (0A) or an
@@ -40,11 +123,19 @@ var listenState = map[string]string{"tcp": "0A", "udp": "07"}
 
 func parse(r io.Reader, proto string) []Port {
 	var out []Port
+	for _, s := range parseSockets(r, proto) {
+		out = append(out, s.Port)
+	}
+	return out
+}
+
+func parseSockets(r io.Reader, proto string) []socket {
+	var out []socket
 	sc := bufio.NewScanner(r)
 	sc.Scan() // header
 	for sc.Scan() {
 		f := strings.Fields(sc.Text())
-		if len(f) < 4 || f[3] != listenState[proto] {
+		if len(f) < 10 || f[3] != listenState[proto] {
 			continue
 		}
 		addr, port, ok := strings.Cut(f[1], ":")
@@ -58,7 +149,7 @@ func parse(r io.Reader, proto string) []Port {
 		if ip := procIP(addr); ip == nil || ip.IsLoopback() {
 			continue
 		}
-		out = append(out, Port{int(n), proto})
+		out = append(out, socket{Port{int(n), proto}, f[9]})
 	}
 	return out
 }

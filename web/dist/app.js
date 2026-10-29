@@ -12,7 +12,7 @@
   };
 
   const TOKEN_KEY = "iptlens_token";
-  const PENDING_MSG = "Change applied. Confirm it in the yellow bar, or it is rolled back automatically.";
+  const PENDING_MSG = "Change applied for now. Press “Keep this change” in the yellow bar, or it is undone on its own.";
 
   const svg = (d) => `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
   const ICON = {
@@ -588,7 +588,17 @@
   $("btn-confirm").addEventListener("click", async () => {
     try {
       const r = await api("/api/v1/confirm", { method: "POST" });
-      toast(r && r.persisted ? "Change confirmed and saved to disk." : "Change confirmed. It is active until reboot (no --persist-file set).", "ok");
+      toast(r && r.persisted ? "Change kept and saved to disk." : "Change kept. It lasts until reboot (no --persist-file set).", "ok");
+    } catch (e) {
+      toast(e.message, "error");
+    }
+    lastSig = "";
+    refresh();
+  });
+  $("btn-undo").addEventListener("click", async () => {
+    try {
+      await api("/api/v1/rollback", { method: "POST" });
+      toast("Undone. The previous rules are back.", "ok");
     } catch (e) {
       toast(e.message, "error");
     }
