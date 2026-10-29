@@ -66,6 +66,14 @@ func currentState() (*SystemState, error) {
 	return ParseIptablesSave(bytes.NewReader(out))
 }
 
+func currentState6() (*SystemState, error) {
+	out, err := runSave6()
+	if err != nil {
+		return nil, fmt.Errorf("ip6tables-save failed: %w", err)
+	}
+	return ParseIptablesSave(bytes.NewReader(out))
+}
+
 // findRule finds rule #num in the live ruleset and checks that it is still
 // the rule the client saw (expect), so a stale view cannot delete the wrong rule.
 func findRule(table, chain string, num int, expect string) (*Rule, error) {

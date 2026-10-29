@@ -23,13 +23,14 @@ const DefaultKeepBackups = 20
 // The pending change is written to disk before anything is applied, so a
 // crash or restart in the middle still rolls it back on the next start.
 type Watchdog struct {
-	mu          sync.Mutex
-	dir         string
-	demo        bool
-	timeout     time.Duration
-	keepBackups int
-	persistFile string
-	pending     *change
+	mu           sync.Mutex
+	dir          string
+	demo         bool
+	timeout      time.Duration
+	keepBackups  int
+	persistFile  string
+	persistFile6 string
+	pending      *change
 }
 
 type change struct {
@@ -66,6 +67,11 @@ func WithKeepBackups(n int) Option {
 // /etc/iptables/rules.v4), so confirmed changes survive a reboot.
 func WithPersistFile(path string) Option {
 	return func(w *Watchdog) { w.persistFile = path }
+}
+
+// WithPersistFile6 is WithPersistFile for the IPv6 ruleset (e.g. /etc/iptables/rules.v6).
+func WithPersistFile6(path string) Option {
+	return func(w *Watchdog) { w.persistFile6 = path }
 }
 
 func NewWatchdog(dir string, demo bool, timeout time.Duration, opts ...Option) (*Watchdog, error) {
@@ -140,8 +146,11 @@ func (w *Watchdog) recover() {
 }
 
 // safeUndo accepts only the shapes this package writes:
-// -t <table> -D|-I|-R <chain> ..., with no --modprobe.
+// [-6] -t <table> -D|-I|-R <chain> ..., with no --modprobe.
 func safeUndo(cmd []string) bool {
+	if len(cmd) > 0 && cmd[0] == v6Flag {
+		cmd = cmd[1:]
+	}
 	if len(cmd) < 4 || cmd[0] != "-t" || checkNames(cmd[1], cmd[3]) != nil {
 		return false
 	}
@@ -247,16 +256,23 @@ func (w *Watchdog) backup() error {
 	if err != nil {
 		return fmt.Errorf("cannot take a backup, nothing was changed: %w", err)
 	}
-	path := filepath.Join(w.dir, fmt.Sprintf("backup-%d.rules", time.Now().UnixNano()))
-	if err := writeFileAtomic(path, save, 0o600); err != nil {
+	stamp := time.Now().UnixNano()
+	if err := writeFileAtomic(filepath.Join(w.dir, fmt.Sprintf("backup-%d.rules", stamp)), save, 0o600); err != nil {
 		return fmt.Errorf("cannot write backup: %w", err)
 	}
-	w.pruneBackups()
+	// IPv6 is snapshotted too when the host has it; changes may touch both.
+	if save6, err := runSave6(); err == nil {
+		if err := writeFileAtomic(filepath.Join(w.dir, fmt.Sprintf("backup-%d.rules6", stamp)), save6, 0o600); err != nil {
+			return fmt.Errorf("cannot write IPv6 backup: %w", err)
+		}
+	}
+	w.pruneBackups("backup-*.rules")
+	w.pruneBackups("backup-*.rules6")
 	return nil
 }
 
-func (w *Watchdog) pruneBackups() {
-	files, err := filepath.Glob(filepath.Join(w.dir, "backup-*.rules"))
+func (w *Watchdog) pruneBackups(pattern string) {
+	files, err := filepath.Glob(filepath.Join(w.dir, pattern))
 	if err != nil || len(files) <= w.keepBackups {
 		return
 	}
@@ -340,24 +356,32 @@ func (w *Watchdog) Confirm() (persisted bool, err error) {
 			log.Printf("cleanup %q: %v: %s", cmd, err, strings.TrimSpace(string(out)))
 		}
 	}
-	if w.persistFile == "" {
+	if w.persistFile == "" && w.persistFile6 == "" {
 		return false, nil
 	}
-	if err := w.persist(); err != nil {
-		return false, fmt.Errorf("change confirmed, but saving it to %s failed: %w", w.persistFile, err)
+	for _, f := range []struct {
+		path string
+		save func() ([]byte, error)
+	}{{w.persistFile, runSaveRules}, {w.persistFile6, runSaveRules6}} {
+		if f.path == "" {
+			continue
+		}
+		if err := persist(f.path, f.save); err != nil {
+			return false, fmt.Errorf("change confirmed, but saving it to %s failed: %w", f.path, err)
+		}
 	}
 	return true, nil
 }
 
-// persist saves the ruleset without chains that Docker, Kubernetes and the
+// persist saves a ruleset without chains that Docker, Kubernetes and the
 // like rebuild themselves; restoring their stale rules at boot breaks them.
 // A symlinked persist file is written through to its target.
-func (w *Watchdog) persist() error {
-	rules, err := runSaveRules()
+func persist(file string, save func() ([]byte, error)) error {
+	rules, err := save()
 	if err != nil {
 		return err
 	}
-	path, err := resolveLinks(w.persistFile)
+	path, err := resolveLinks(file)
 	if err != nil {
 		return err
 	}

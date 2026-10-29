@@ -174,7 +174,7 @@ func TestPreviewOrdersSamePortByProto(t *testing.T) {
 	next := iptables.AccessPolicy{Default: iptables.LevelPublic, Ports: []iptables.PortAccess{
 		{Port: 53, Proto: "udp", Level: iptables.LevelClosed}, {Port: 53, Proto: "tcp", Level: iptables.LevelClosed}}}
 	for i := 0; i < 20; i++ {
-		pv := previewOf(iptables.AccessPolicy{}, next, nil)
+		pv := previewOf(iptables.AccessPolicy{}, next, nil, true)
 		if len(pv.Changes) != 2 || !strings.HasPrefix(pv.Changes[0], "Port 53 (DNS)") || !strings.HasPrefix(pv.Changes[1], "Port 53/udp") {
 			t.Fatalf("changes = %q", pv.Changes)
 		}
@@ -186,5 +186,24 @@ func TestAccessPreviewNamesTrustedInterfaces(t *testing.T) {
 	all := strings.Join(p.Warnings, "\n")
 	if !strings.Contains(all, "docker0") || !strings.Contains(all, "br-*") {
 		t.Fatalf("warnings do not name the always-allowed interfaces: %q", p.Warnings)
+	}
+}
+
+func TestAccessNotesWhenIPv6Filtered(t *testing.T) {
+	rec := do(t, newTestServer(t, ""), http.MethodGet, "/api/v1/access", "")
+	var v accessView
+	_ = json.Unmarshal(rec.Body.Bytes(), &v)
+	if !strings.Contains(v.Notes[0], "IPv6 is filtered the same way") {
+		t.Fatalf("notes = %q", v.Notes)
+	}
+	if got := ipv6Notes(false); !strings.Contains(got, "not filtered") {
+		t.Fatalf("unavailable note = %q", got)
+	}
+}
+
+func TestAccessPreviewIPv6SubnetOnly(t *testing.T) {
+	_, p := preview(t, `{"vpn":{"ifaces":[],"subnets":["100.64.0.0/10"]},"default":"vpn","ports":[]}`)
+	if !strings.Contains(strings.Join(p.Warnings, "\n"), "Over IPv6") {
+		t.Fatalf("warnings = %q", p.Warnings)
 	}
 }

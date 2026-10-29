@@ -19,6 +19,9 @@ First public release.
   plain sentences, with the iptables commands folded away, and go through the
   usual confirm-or-rollback flow. The previous UI is the *Advanced* view.
 - `GET /api/v1/access`, `POST /api/v1/access/preview`, `POST /api/v1/access/apply`.
+- The simple view filters IPv6 too, through `ip6tables` when present, in the
+  same confirm-or-rollback step as IPv4. ICMPv6 and the DHCPv6 client stay
+  allowed. `--persist-file6` saves the IPv6 ruleset; backups include it.
 - `--persist-file`: on confirm, save the full ruleset (for example to
   `/etc/iptables/rules.v4`) so confirmed changes survive a reboot.
 - `--keep-backups` (default 20): old `iptables-save` snapshots are pruned.

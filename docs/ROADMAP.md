@@ -11,7 +11,8 @@ unit and community docs. See [CHANGELOG.md](../CHANGELOG.md).
 
 ## v0.2 — reach and correctness
 
-- **IPv6:** `ip6tables` support with a family switch in the UI.
+- **IPv6 in the Advanced view:** a family switch for the rules table and the
+  simulator (the simple view already applies its policy to IPv6).
 - **Simulator coverage:** `OUTPUT` for locally generated traffic, plus the
   `mangle` and `raw` tables in kernel order.
 - **Localization:** the UI string table moves to a locale file; Uzbek as the

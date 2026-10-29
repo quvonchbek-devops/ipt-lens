@@ -22,7 +22,8 @@ walk through common jobs (C). UI language: English.
 
 ## Non-goals
 
-- IPv6 (`ip6tables`). The UI must say plainly that IPv6 is not filtered.
+- IPv6 in the Advanced view. (Update 2026-10-29: the simple view now applies
+  its policy with `ip6tables` too; without it, the UI says IPv6 is not filtered.)
 - Editing rules that IPT-Lens did not create. They stay visible and untouched in
   Advanced.
 - Outbound filtering, rate limits, port ranges.

@@ -106,7 +106,8 @@ the token once and keeps it for the browser session only.
 ### Keeping changes after a reboot
 
 iptables rules live in the kernel and are lost on reboot. Pass
-`--persist-file /etc/iptables/rules.v4` and IPT-Lens saves the ruleset there each
+`--persist-file /etc/iptables/rules.v4` (and `--persist-file6
+/etc/iptables/rules.v6` for IPv6) and IPT-Lens saves the ruleset there each
 time you confirm a change. Chains that Docker, Kubernetes, Calico, libvirt or ufw
 manage are left out, since those tools rebuild them and restoring stale copies at
 boot breaks container networking. If the path is a symlink, its target is written. Pair it with a loader such as
@@ -123,6 +124,7 @@ the flag, the UI tells you that a confirmed change lasts only until reboot.
 | `--state-dir` | `/var/lib/ipt-lens` | Backups and the pending change |
 | `--keep-backups` | `20` | Number of `iptables-save` snapshots to keep |
 | `--persist-file` | (empty) | Save the ruleset here on confirm |
+| `--persist-file6` | (empty) | Save the IPv6 ruleset here on confirm |
 | `--allowed-hosts` | (empty) | Extra host names accepted in the `Host` header, for reverse proxies |
 | `--version` | | Print the version and exit |
 
@@ -141,13 +143,19 @@ traffic from local containers, pods and VMs (`docker0`, `br-*`, `cni0`, `cali*`,
 `lxc*`, `virbr*`). Overlay tunnels such as `flannel.1` are filtered, since their
 traffic comes from other hosts: on a Kubernetes node, allow node-to-node ports
 explicitly. If you have a bridge named `br-*` that connects to an outside
-network, it is trusted too; filter it in the Advanced view. IPT-Lens' own port never drops below "VPN only", and a
-warning appears before SSH or your VPN's own port (WireGuard, Tailscale,
-OpenVPN) leaves "Everyone".
+network, it is trusted too; filter it in the Advanced view.
+
+IPT-Lens' own port never drops below "VPN only", and a warning appears before
+SSH or your VPN's own port (WireGuard, Tailscale, OpenVPN) leaves "Everyone".
 
 The VPN is identified by its interface (`wg0`, `tailscale0`, ...). A subnet is
 used only when no interface is chosen, since a source address can be spoofed.
-IPv6 is not filtered.
+
+**IPv6** gets the same policy through `ip6tables` when it is installed, in one
+step with IPv4: if either fails, both roll back. ICMPv6 (needed for neighbour
+discovery) and the DHCPv6 client from link-local addresses are always allowed.
+VPN subnets are IPv4, so over IPv6 the VPN is recognised by its interface only.
+Without `ip6tables`, the UI says plainly that IPv6 is not filtered.
 
 ## How a change works
 
@@ -185,7 +193,8 @@ All endpoints are under `/api/v1`, take and return JSON, and need
 
 ## Limitations
 
-- IPv4 only (`iptables`, not `ip6tables`).
+- The Advanced view and the simulator are IPv4 only; the simple view covers
+  IPv6 too.
 - The simulator covers `nat/PREROUTING`, `filter/INPUT`, `filter/FORWARD` and
   `nat/POSTROUTING`. Locally generated traffic (`OUTPUT`) and the `mangle` and
   `raw` tables are shown but not simulated.

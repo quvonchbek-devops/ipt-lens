@@ -31,6 +31,7 @@ type accessView struct {
 	VPNCandidates []enricher.VPNIface   `json:"vpn_candidates"`
 	Notes         []string              `json:"notes"`
 	dockerNotes   []string              // also shown as warnings in a preview
+	ipv6          bool                  // the policy is applied with ip6tables too
 }
 
 type accessPreview struct {
@@ -45,6 +46,7 @@ type discovery struct {
 	listening []ports.Port
 	published []enricher.Published
 	vpn       []enricher.VPNIface
+	ipv6      bool
 }
 
 func (s *Server) discover() discovery {
@@ -56,9 +58,11 @@ func (s *Server) discover() discovery {
 				{Port: 3306, Proto: "tcp", Container: "mysql"}},
 			vpn: []enricher.VPNIface{{Name: "wg0", Subnets: []string{"10.8.0.0/24"}},
 				{Name: "tailscale0", Subnets: []string{"100.64.0.0/10"}}},
+			ipv6: true,
 		}
 	}
-	return discovery{listening: ports.Listening(), published: enricher.PublishedPorts(), vpn: enricher.VPNInterfaces()}
+	return discovery{listening: ports.Listening(), published: enricher.PublishedPorts(),
+		vpn: enricher.VPNInterfaces(), ipv6: s.ipv6()}
 }
 
 var levelLabel = map[iptables.Level]string{
@@ -68,7 +72,16 @@ var levelLabel = map[iptables.Level]string{
 // vpnServices are VPN endpoints: clients reach them before they are on the VPN.
 var vpnServices = map[string]bool{"WireGuard": true, "Tailscale": true, "OpenVPN": true}
 
-const ipv6Note = "IPv6 traffic is not filtered by IPT-Lens. If this server has a public IPv6 address, protect it separately."
+// ipv6Notes says whether IPv6 is covered: the policy is applied with
+// ip6tables too when it is available.
+func ipv6Notes(available bool) string {
+	if available {
+		return "IPv6 is filtered the same way. VPN subnets are IPv4 only; over IPv6 the VPN is recognised by its interface."
+	}
+	return "ip6tables is not available, so IPv6 traffic is not filtered. If this server has a public IPv6 address, protect it separately."
+}
+
+func (s *Server) ipv6() bool { return s.Demo || iptables.IPv6Available() }
 
 // levelOf returns the effective level of a port under p, and whether p sets it
 // explicitly. An unconfigured policy (empty default) lets everything through.
@@ -114,7 +127,7 @@ func (s *Server) buildView(st *iptables.SystemState, d discovery) accessView {
 	hasChain, covered := iptables.DockerCoverage(st)
 	dn := dockerNotes(hasChain, covered || !configured, len(d.published))
 	v := accessView{Configured: configured, Policy: cur, VPNCandidates: d.vpn,
-		Notes: append([]string{ipv6Note}, dn...), dockerNotes: dn}
+		Notes: append([]string{ipv6Notes(d.ipv6)}, dn...), dockerNotes: dn, ipv6: d.ipv6}
 	if v.VPNCandidates == nil {
 		v.VPNCandidates = []enricher.VPNIface{}
 	}
@@ -195,7 +208,7 @@ func (s *Server) handleAccessPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view := s.buildView(st, s.discover())
-	pv := previewOf(view.Policy, next, view.Rows)
+	pv := previewOf(view.Policy, next, view.Rows, view.ipv6)
 	pv.Warnings = append(pv.Warnings, view.dockerNotes...)
 	writeJSON(w, http.StatusOK, pv)
 }
@@ -230,7 +243,7 @@ func rowLabel(port int, proto, name string) string {
 
 // previewOf describes the change from cur to next in plain sentences, with
 // warnings and the iptables commands that implement next.
-func previewOf(cur, next iptables.AccessPolicy, rows []accessRow) accessPreview {
+func previewOf(cur, next iptables.AccessPolicy, rows []accessRow, ipv6 bool) accessPreview {
 	pv := accessPreview{Changes: []string{}, Warnings: []string{}}
 	vpnText := func(v iptables.VPN) string {
 		parts := append(append([]string{}, v.Ifaces...), v.Subnets...)
@@ -302,7 +315,11 @@ func previewOf(cur, next iptables.AccessPolicy, rows []accessRow) accessPreview 
 	pv.Warnings = append(pv.Warnings, "Traffic from containers, pods and VMs on this host is always allowed, "+
 		"through these interfaces: "+strings.Join(iptables.InternalIfaces(), ", ")+
 		". If a bridge named br-* connects to an outside network, filter it in the Advanced view.")
-	pv.Warnings = append(pv.Warnings, ipv6Note)
+	if ipv6 && len(next.VPN.Ifaces) == 0 && usesVPN(next) {
+		pv.Warnings = append(pv.Warnings, "Over IPv6, \"VPN only\" needs a VPN interface. With only a subnet, "+
+			"those ports are closed to everyone over IPv6.")
+	}
+	pv.Warnings = append(pv.Warnings, ipv6Notes(ipv6))
 	for _, rule := range iptables.InputRules(next) {
 		pv.Commands = append(pv.Commands, "iptables -A IPTLENS-IN "+shellJoin(rule))
 	}
@@ -335,4 +352,16 @@ func dockerNotes(hasChain, covered bool, published int) []string {
 		return []string{"Docker started after your last apply, so container ports are not filtered yet. Review and apply again."}
 	}
 	return nil
+}
+
+func usesVPN(p iptables.AccessPolicy) bool {
+	if p.Default == iptables.LevelVPN {
+		return true
+	}
+	for _, pa := range p.Ports {
+		if pa.Level == iptables.LevelVPN {
+			return true
+		}
+	}
+	return false
 }

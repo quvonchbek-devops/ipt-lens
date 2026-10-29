@@ -2,6 +2,8 @@ package iptables
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -29,12 +31,12 @@ func joinRules(rules [][]string) []string {
 }
 
 func TestAccessInputRules(t *testing.T) {
-	got := joinRules(inputRules(samplePolicy()))
+	got := joinRules(inputRules(samplePolicy(), false))
 	want := []string{
 		"-i lo -m comment --comment iptlens:v1 default=vpn vpn=wg0;100.64.0.0/10 -j RETURN",
 		"-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN",
 		"-p icmp -j RETURN",
-		"-p udp --dport 68 -j RETURN",
+		"-p udp --sport 67 --dport 68 -j RETURN",
 		"-i docker0 -j RETURN",
 		"-i br-+ -j RETURN",
 		"-i cni0 -j RETURN",
@@ -54,7 +56,7 @@ func TestAccessInputRules(t *testing.T) {
 }
 
 func TestAccessDockerRules(t *testing.T) {
-	got := joinRules(dockerRules(samplePolicy()))
+	got := joinRules(dockerRules(samplePolicy(), false))
 	want := []string{
 		"-m conntrack ! --ctstate DNAT -m comment --comment iptlens:v1 -j RETURN",
 		"-i docker0 -j RETURN",
@@ -78,7 +80,7 @@ func TestAccessDockerRules(t *testing.T) {
 func TestAccessPublicDefaultAddsNoCatchAll(t *testing.T) {
 	p := samplePolicy()
 	p.Default = LevelPublic
-	for _, r := range joinRules(inputRules(p)) {
+	for _, r := range joinRules(inputRules(p, false)) {
 		if strings.Contains(r, "iptlens:default") {
 			t.Fatalf("public default produced %q", r)
 		}
@@ -132,14 +134,14 @@ func saveWith(p AccessPolicy, letter string, docker bool) string {
 	}
 	b.WriteString("-A INPUT -m comment --comment \"iptlens:jump\" -j " + in + "\n")
 	b.WriteString("-A INPUT -p tcp --dport 2222 -j ACCEPT\n")
-	for _, r := range inputRules(p) {
+	for _, r := range inputRules(p, false) {
 		b.WriteString("-A " + in + " " + quoteArgs(r) + "\n")
 	}
 	if docker {
 		dk := "IPTLENS-DK-" + letter
 		b.WriteString("-A DOCKER-USER -m comment --comment \"iptlens:jump\" -j " + dk + "\n")
 		b.WriteString("-A DOCKER-USER -j RETURN\n")
-		for _, r := range dockerRules(p) {
+		for _, r := range dockerRules(p, false) {
 			b.WriteString("-A " + dk + " " + quoteArgs(r) + "\n")
 		}
 	}
@@ -289,7 +291,7 @@ func mustContain(t *testing.T, calls []string, want string) {
 func TestAccessSubnetOnlyWithoutInterface(t *testing.T) {
 	p := samplePolicy()
 	p.VPN.Ifaces = nil
-	got := strings.Join(joinRules(inputRules(p)), "\n")
+	got := strings.Join(joinRules(inputRules(p, false)), "\n")
 	if !strings.Contains(got, "-s 100.64.0.0/10 -p tcp --dport 5432") {
 		t.Fatalf("subnet not used when it is the only VPN identity:\n%s", got)
 	}
@@ -301,5 +303,149 @@ func TestApplyRefusesManagedChain(t *testing.T) {
 	err := w.Apply(ApplyRequest{Table: "filter", Chain: "IPTLENS-IN-A", Position: 1, Rule: "-j ACCEPT"})
 	if !errors.Is(err, ErrProtected) || !strings.Contains(err.Error(), "IPT-Lens") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestAccessInputRulesIPv6(t *testing.T) {
+	got := joinRules(inputRules(samplePolicy(), true))
+	want := []string{
+		"-i lo -m comment --comment iptlens:v1 default=vpn vpn=wg0;100.64.0.0/10 -j RETURN",
+		"-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN",
+		"-p ipv6-icmp -j RETURN",
+		"-s fe80::/10 -p udp --sport 547 --dport 546 -j RETURN",
+		"-i docker0 -j RETURN",
+		"-i br-+ -j RETURN",
+		"-i cni0 -j RETURN",
+		"-i cali+ -j RETURN",
+		"-i lxc+ -j RETURN",
+		"-i virbr+ -j RETURN",
+		"-p tcp --dport 22 -m comment --comment iptlens:port=22/tcp level=public -j RETURN",
+		"-i wg0 -p tcp --dport 5432 -m comment --comment iptlens:port=5432/tcp level=vpn -j RETURN",
+		"-p tcp --dport 5432 -m comment --comment iptlens:port=5432/tcp level=vpn -j DROP",
+		"-p tcp --dport 3306 -m comment --comment iptlens:port=3306/tcp level=closed -j DROP",
+		"-i wg0 -m comment --comment iptlens:default -j RETURN",
+		"-m comment --comment iptlens:default -j DROP",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ipv6 input rules:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestAccessIPv6IgnoresIPv4Subnets(t *testing.T) {
+	p := samplePolicy()
+	p.VPN.Ifaces = nil
+	for _, r := range joinRules(inputRules(p, true)) {
+		if strings.HasPrefix(r, "-s 100.64") {
+			t.Fatalf("IPv4 subnet in an ip6tables rule: %q", r)
+		}
+	}
+}
+
+const v6Base = "*filter\n:INPUT ACCEPT [0:0]\n:DOCKER-USER - [0:0]\n-A DOCKER-USER -j RETURN\nCOMMIT\n"
+
+func TestApplyAccessAlsoIPv6(t *testing.T) {
+	f := installFake(t)
+	f.save = v6Base
+	f.save6 = v6Base
+	w := newTestWatchdog(t, time.Hour)
+	if err := w.ApplyAccess(samplePolicy()); err != nil {
+		t.Fatal(err)
+	}
+	calls := f.Calls()
+	mustContain(t, calls, "-t filter -I INPUT 1 -m comment --comment iptlens:jump -j IPTLENS-IN-A")
+	mustContain(t, calls, "-6 -t filter -N IPTLENS-IN-A")
+	mustContain(t, calls, "-6 -t filter -A IPTLENS-IN-A -p ipv6-icmp -j RETURN")
+	mustContain(t, calls, "-6 -t filter -I INPUT 1 -m comment --comment iptlens:jump -j IPTLENS-IN-A")
+	mustContain(t, calls, "-6 -t filter -I DOCKER-USER 1 -m comment --comment iptlens:jump -j IPTLENS-DK-A")
+	// Every chain, IPv4 and IPv6, is complete before the first jump switches traffic.
+	firstJump := -1
+	for i, c := range calls {
+		if strings.Contains(c, "iptlens:jump") {
+			firstJump = i
+			break
+		}
+	}
+	for _, c := range calls[firstJump:] {
+		if strings.Contains(c, " -A IPTLENS-") {
+			t.Fatalf("rule %q added after traffic was switched", c)
+		}
+	}
+}
+
+func TestApplyAccessSkipsIPv6WhenUnavailable(t *testing.T) {
+	f := installFake(t)
+	f.save = v6Base
+	w := newTestWatchdog(t, time.Hour)
+	if err := w.ApplyAccess(samplePolicy()); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range f.Calls() {
+		if strings.HasPrefix(c, "-6 ") {
+			t.Fatalf("ip6tables called although unavailable: %q", c)
+		}
+	}
+}
+
+func TestApplyAccessIPv6FailureRollsBackIPv4(t *testing.T) {
+	f := installFake(t)
+	f.save = v6Base
+	f.save6 = v6Base
+	f.failOn = "-6 -t filter -A IPTLENS-IN-A -p ipv6-icmp"
+	w := newTestWatchdog(t, time.Hour)
+	if err := w.ApplyAccess(samplePolicy()); err == nil {
+		t.Fatal("expected an error")
+	}
+	calls := f.Calls()
+	mustContain(t, calls, "-t filter -X IPTLENS-IN-A")
+	mustContain(t, calls, "-6 -t filter -X IPTLENS-IN-A")
+	for _, c := range calls {
+		if strings.Contains(c, "iptlens:jump") {
+			t.Fatalf("traffic was switched before every chain was built: %q", c)
+		}
+	}
+}
+
+func TestSafeUndoIPv6(t *testing.T) {
+	if !safeUndo([]string{"-6", "-t", "filter", "-X", "IPTLENS-IN-B"}) ||
+		!safeUndo([]string{"-6", "-t", "filter", "-D", "INPUT", "-j", "IPTLENS-IN-A"}) {
+		t.Fatal("ipv6 undo refused")
+	}
+	if safeUndo([]string{"-6", "-t", "filter", "-F", "INPUT"}) || safeUndo([]string{"-6", "-6", "-t", "filter", "-D", "INPUT"}) {
+		t.Fatal("unsafe ipv6 undo accepted")
+	}
+}
+
+func TestConfirmPersistsIPv6(t *testing.T) {
+	f := installFake(t)
+	f.save = v6Base
+	f.save6 = "*filter\n:INPUT DROP [0:0]\n:DOCKER - [0:0]\n-A DOCKER -j ACCEPT\nCOMMIT\n"
+	dir := privateDir(t)
+	w := newTestWatchdog(t, time.Hour, WithPersistFile(filepath.Join(dir, "rules.v4")), WithPersistFile6(filepath.Join(dir, "rules.v6")))
+	if err := w.ApplyAccess(samplePolicy()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Confirm(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "rules.v6"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), ":INPUT DROP") || strings.Contains(string(data), "DOCKER") {
+		t.Fatalf("rules.v6 = %q", data)
+	}
+}
+
+func TestApplyAccessBacksUpIPv6(t *testing.T) {
+	f := installFake(t)
+	f.save = v6Base
+	f.save6 = v6Base
+	w := newTestWatchdog(t, time.Hour)
+	if err := w.ApplyAccess(samplePolicy()); err != nil {
+		t.Fatal(err)
+	}
+	files, _ := filepath.Glob(filepath.Join(w.dir, "backup-*.rules6"))
+	if len(files) != 1 {
+		t.Fatalf("ipv6 backups = %v", files)
 	}
 }

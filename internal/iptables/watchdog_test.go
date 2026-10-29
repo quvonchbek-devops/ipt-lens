@@ -18,14 +18,16 @@ type fakeIPT struct {
 	failOn string                 // a call containing this substring fails
 	onCall func(cmd string) error // optional hook, runs before the call is recorded
 	save   string
+	save6  string // empty: ip6tables is not available
 }
 
 func installFake(t *testing.T) *fakeIPT {
 	t.Helper()
 	f := &fakeIPT{save: "*filter\n:INPUT ACCEPT [0:0]\nCOMMIT\n"}
 	oldIPT, oldSave, oldRules := runIPT, runSave, runSaveRules
-	runIPT = func(args ...string) ([]byte, error) {
-		cmd := strings.Join(args[2:], " ")
+	oldIP6T, oldSave6, oldRules6 := runIP6T, runSave6, runSaveRules6
+	record := func(prefix string, args []string) ([]byte, error) {
+		cmd := prefix + strings.Join(args[2:], " ")
 		if f.onCall != nil {
 			if err := f.onCall(cmd); err != nil {
 				return []byte(err.Error()), err
@@ -39,9 +41,21 @@ func installFake(t *testing.T) *fakeIPT {
 		}
 		return nil, nil
 	}
+	runIPT = func(args ...string) ([]byte, error) { return record("", args) }
+	runIP6T = func(args ...string) ([]byte, error) { return record("-6 ", args) }
 	runSave = func() ([]byte, error) { return []byte(f.save), nil }
 	runSaveRules = func() ([]byte, error) { return []byte(f.save), nil }
-	t.Cleanup(func() { runIPT, runSave, runSaveRules = oldIPT, oldSave, oldRules })
+	save6 := func() ([]byte, error) {
+		if f.save6 == "" {
+			return nil, errors.New("ip6tables-save: not found")
+		}
+		return []byte(f.save6), nil
+	}
+	runSave6, runSaveRules6 = save6, save6
+	t.Cleanup(func() {
+		runIPT, runSave, runSaveRules = oldIPT, oldSave, oldRules
+		runIP6T, runSave6, runSaveRules6 = oldIP6T, oldSave6, oldRules6
+	})
 	return f
 }
 

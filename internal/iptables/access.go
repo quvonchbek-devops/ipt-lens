@@ -146,8 +146,8 @@ func (p AccessPolicy) metaComment() string {
 }
 
 // levelRules returns the rules for one level: match narrows the packet, note is
-// the rule comment.
-func (p AccessPolicy) levelRules(level Level, match []string, note string) [][]string {
+// the rule comment. VPN subnets are IPv4, so v6 rules use interfaces only.
+func (p AccessPolicy) levelRules(level Level, match []string, note string, v6 bool) [][]string {
 	switch level {
 	case LevelPublic:
 		return [][]string{cat(match, comment(note), []string{"-j", "RETURN"})}
@@ -160,7 +160,7 @@ func (p AccessPolicy) levelRules(level Level, match []string, note string) [][]s
 	}
 	// A source address can be spoofed from the internet; the incoming interface
 	// cannot. Subnets identify the VPN only when no interface is chosen.
-	if len(p.VPN.Ifaces) == 0 {
+	if len(p.VPN.Ifaces) == 0 && !v6 {
 		for _, s := range p.VPN.Subnets {
 			out = append(out, cat([]string{"-s", s}, match, comment(note), []string{"-j", "RETURN"}))
 		}
@@ -173,20 +173,29 @@ func portNote(pa PortAccess) string {
 }
 
 // inputRules generates the IPTLENS-IN chain for filter/INPUT.
-func inputRules(p AccessPolicy) [][]string {
+func inputRules(p AccessPolicy, v6 bool) [][]string {
 	rules := [][]string{
 		cat([]string{"-i", "lo"}, comment(p.metaComment()), []string{"-j", "RETURN"}),
 		{"-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "RETURN"},
-		{"-p", "icmp", "-j", "RETURN"},
-		{"-p", "udp", "--dport", "68", "-j", "RETURN"}, // DHCP client: losing the lease takes the host offline
+	}
+	// ICMP carries errors and path MTU; ICMPv6 also neighbour discovery, without
+	// which IPv6 stops working. The DHCP client must keep its lease.
+	if v6 {
+		rules = append(rules,
+			[]string{"-p", "ipv6-icmp", "-j", "RETURN"},
+			[]string{"-s", "fe80::/10", "-p", "udp", "--sport", "547", "--dport", "546", "-j", "RETURN"})
+	} else {
+		rules = append(rules,
+			[]string{"-p", "icmp", "-j", "RETURN"},
+			[]string{"-p", "udp", "--sport", "67", "--dport", "68", "-j", "RETURN"})
 	}
 	rules = append(rules, internalRules()...)
 	for _, pa := range p.Ports {
 		match := []string{"-p", pa.Proto, "--dport", strconv.Itoa(pa.Port)}
-		rules = append(rules, p.levelRules(pa.Level, match, portNote(pa))...)
+		rules = append(rules, p.levelRules(pa.Level, match, portNote(pa), v6)...)
 	}
 	if p.Default != LevelPublic {
-		rules = append(rules, p.levelRules(p.Default, nil, commentDef)...)
+		rules = append(rules, p.levelRules(p.Default, nil, commentDef, v6)...)
 	}
 	return rules
 }
@@ -194,17 +203,17 @@ func inputRules(p AccessPolicy) [][]string {
 // dockerRules generates the IPTLENS-DK chain for DOCKER-USER. It judges only
 // connections to published ports (conntrack state DNAT), matched by the port
 // the client connected to.
-func dockerRules(p AccessPolicy) [][]string {
+func dockerRules(p AccessPolicy, v6 bool) [][]string {
 	rules := [][]string{
 		cat([]string{"-m", "conntrack", "!", "--ctstate", "DNAT"}, comment(commentMeta), []string{"-j", "RETURN"}),
 	}
 	rules = append(rules, internalRules()...)
 	for _, pa := range p.Ports {
 		match := []string{"-p", pa.Proto, "-m", "conntrack", "--ctorigdstport", strconv.Itoa(pa.Port)}
-		rules = append(rules, p.levelRules(pa.Level, match, portNote(pa))...)
+		rules = append(rules, p.levelRules(pa.Level, match, portNote(pa), v6)...)
 	}
 	if p.Default != LevelPublic {
-		rules = append(rules, p.levelRules(p.Default, nil, commentDef)...)
+		rules = append(rules, p.levelRules(p.Default, nil, commentDef, v6)...)
 	}
 	return rules
 }
@@ -296,30 +305,31 @@ func otherLetter(active, prefix string) string {
 // managedPlan builds, for one parent chain, the steps that create the new
 // managed chain and switch the parent's jump to it, plus the commands that
 // remove the old chain after confirmation.
-func managedPlan(tbl *Table, parent, prefix string, rules [][]string) ([]step, [][]string, error) {
+func managedPlan(tbl *Table, fam []string, parent, prefix string, rules [][]string) ([]step, [][]string, error) {
 	active := activeChain(tbl, parent, prefix)
 	next := otherLetter(active, prefix)
 	if _, exists := tbl.Chains[next]; exists {
 		// Left over from an interrupted cleanup and not referenced: remove it first.
-		if out, err := ipt("-t", "filter", "-F", next); err != nil {
+		if out, err := ipt(cat(fam, []string{"-t", "filter", "-F", next})...); err != nil {
 			return nil, nil, fmt.Errorf("cannot clear stale chain %s: %s", next, strings.TrimSpace(string(out)))
 		}
-		if out, err := ipt("-t", "filter", "-X", next); err != nil {
+		if out, err := ipt(cat(fam, []string{"-t", "filter", "-X", next})...); err != nil {
 			return nil, nil, fmt.Errorf("cannot remove stale chain %s: %s", next, strings.TrimSpace(string(out)))
 		}
 	}
-	steps := []step{{do: []string{"-t", "filter", "-N", next}, undo: []string{"-t", "filter", "-X", next}}}
+	tf := cat(fam, []string{"-t", "filter"})
+	steps := []step{{do: cat(tf, []string{"-N", next}), undo: cat(tf, []string{"-X", next})}}
 	for i, r := range rules {
-		s := step{do: cat([]string{"-t", "filter", "-A", next}, r)}
+		s := step{do: cat(tf, []string{"-A", next}, r)}
 		if i == 0 {
-			s.undo = []string{"-t", "filter", "-F", next}
+			s.undo = cat(tf, []string{"-F", next})
 		}
 		steps = append(steps, s)
 	}
 	// Switch by rule spec, never by position: another tool (fail2ban,
 	// kube-proxy) may insert into the parent chain during the confirm window.
 	jump := func(op, chain string) []string {
-		args := []string{"-t", "filter", op, parent}
+		args := cat(tf, []string{op, parent})
 		if op == "-I" {
 			args = append(args, "1")
 		}
@@ -329,7 +339,7 @@ func managedPlan(tbl *Table, parent, prefix string, rules [][]string) ([]step, [
 	var cleanup [][]string
 	if active != "" {
 		steps = append(steps, step{do: jump("-D", active), undo: jump("-I", active)})
-		cleanup = [][]string{{"-t", "filter", "-F", active}, {"-t", "filter", "-X", active}}
+		cleanup = [][]string{cat(tf, []string{"-F", active}), cat(tf, []string{"-X", active})}
 	}
 	return steps, cleanup, nil
 }
@@ -355,8 +365,8 @@ func (w *Watchdog) ApplyAccess(p AccessPolicy) error {
 		}
 		pl := plan{desc: "access policy"}
 		var jumps []step
-		add := func(parent, prefix string, rules [][]string) error {
-			steps, clean, err := managedPlan(tbl, parent, prefix, rules)
+		add := func(tbl *Table, fam []string, parent, prefix string, rules [][]string) error {
+			steps, clean, err := managedPlan(tbl, fam, parent, prefix, rules)
 			if err != nil {
 				return err
 			}
@@ -366,11 +376,22 @@ func (w *Watchdog) ApplyAccess(p AccessPolicy) error {
 			pl.cleanup = append(pl.cleanup, clean...)
 			return nil
 		}
-		if err := add("INPUT", accessIn, inputRules(p)); err != nil {
+		family := func(tbl *Table, fam []string, v6 bool) error {
+			if err := add(tbl, fam, "INPUT", accessIn, inputRules(p, v6)); err != nil {
+				return err
+			}
+			if _, ok := tbl.Chains["DOCKER-USER"]; ok {
+				return add(tbl, fam, "DOCKER-USER", accessDocker, dockerRules(p, v6))
+			}
+			return nil
+		}
+		if err := family(tbl, nil, false); err != nil {
 			return plan{}, err
 		}
-		if _, ok := tbl.Chains["DOCKER-USER"]; ok {
-			if err := add("DOCKER-USER", accessDocker, dockerRules(p)); err != nil {
+		// IPv6 gets the same policy when ip6tables is present; without it there
+		// is nothing to filter with, and the UI says so.
+		if st6, err := currentState6(); err == nil && st6.Tables["filter"] != nil {
+			if err := family(st6.Tables["filter"], []string{v6Flag}, true); err != nil {
 				return plan{}, err
 			}
 		}
@@ -392,5 +413,5 @@ func DockerCoverage(st *SystemState) (hasChain, covered bool) {
 }
 
 // InputRules and DockerRules expose the generated chains for previews.
-func InputRules(p AccessPolicy) [][]string  { return inputRules(p) }
-func DockerRules(p AccessPolicy) [][]string { return dockerRules(p) }
+func InputRules(p AccessPolicy) [][]string  { return inputRules(p, false) }
+func DockerRules(p AccessPolicy) [][]string { return dockerRules(p, false) }

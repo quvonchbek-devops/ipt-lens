@@ -32,6 +32,7 @@ func main() {
 	stateDir := flag.String("state-dir", "/var/lib/ipt-lens", "directory for backups and the pending change")
 	keepBackups := flag.Int("keep-backups", iptables.DefaultKeepBackups, "number of iptables-save backups to keep")
 	persistFile := flag.String("persist-file", "", "on confirm, save the ruleset here (e.g. /etc/iptables/rules.v4); empty = do not persist")
+	persistFile6 := flag.String("persist-file6", "", "on confirm, save the IPv6 ruleset here (e.g. /etc/iptables/rules.v6); empty = do not persist")
 	allowedHosts := flag.String("allowed-hosts", "", "extra comma-separated host names accepted in the Host header (e.g. behind a reverse proxy)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
@@ -52,7 +53,8 @@ func main() {
 
 	// NewWatchdog creates the state directory and checks that it is private.
 	watch, err := iptables.NewWatchdog(*stateDir, *demo, *timeout,
-		iptables.WithKeepBackups(*keepBackups), iptables.WithPersistFile(*persistFile))
+		iptables.WithKeepBackups(*keepBackups), iptables.WithPersistFile(*persistFile),
+		iptables.WithPersistFile6(*persistFile6))
 	if err != nil {
 		log.Fatal(err)
 	}
