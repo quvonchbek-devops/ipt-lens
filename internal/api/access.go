@@ -299,6 +299,9 @@ func previewOf(cur, next iptables.AccessPolicy, rows []accessRow) accessPreview 
 		pv.Warnings = append(pv.Warnings, "With only a subnet, IPT-Lens trusts the packet's source address, "+
 			"which can be spoofed from the internet. Choose your VPN interface if you can.")
 	}
+	pv.Warnings = append(pv.Warnings, "Traffic from containers, pods and VMs on this host is always allowed, "+
+		"through these interfaces: "+strings.Join(iptables.InternalIfaces(), ", ")+
+		". If a bridge named br-* connects to an outside network, filter it in the Advanced view.")
 	pv.Warnings = append(pv.Warnings, ipv6Note)
 	for _, rule := range iptables.InputRules(next) {
 		pv.Commands = append(pv.Commands, "iptables -A IPTLENS-IN "+shellJoin(rule))

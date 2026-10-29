@@ -180,3 +180,11 @@ func TestPreviewOrdersSamePortByProto(t *testing.T) {
 		}
 	}
 }
+
+func TestAccessPreviewNamesTrustedInterfaces(t *testing.T) {
+	_, p := preview(t, `{"vpn":{"ifaces":["wg0"],"subnets":[]},"default":"vpn","ports":[]}`)
+	all := strings.Join(p.Warnings, "\n")
+	if !strings.Contains(all, "docker0") || !strings.Contains(all, "br-*") {
+		t.Fatalf("warnings do not name the always-allowed interfaces: %q", p.Warnings)
+	}
+}

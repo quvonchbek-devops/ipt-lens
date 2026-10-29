@@ -50,8 +50,22 @@ const (
 )
 
 // internalIfaces carry traffic from containers, pods and VMs on this host;
-// filtering them would break Docker, Kubernetes CNIs and libvirt.
-var internalIfaces = []string{"docker0", "br-+", "cni0", "flannel.+", "cali+", "cilium_+", "lxc+", "virbr+"}
+// filtering them would break Docker, Kubernetes CNIs and libvirt. Overlay
+// tunnels (flannel.1, cilium_vxlan) are left out: their traffic comes from
+// other hosts. br-+ is Docker's naming, but matches any bridge named br-*.
+var internalIfaces = []string{"docker0", "br-+", "cni0", "cali+", "lxc+", "virbr+"}
+
+// InternalIfaces lists the always-allowed interface patterns, for display.
+func InternalIfaces() []string {
+	out := make([]string, len(internalIfaces))
+	for i, n := range internalIfaces {
+		out[i] = strings.TrimSuffix(n, "+")
+		if out[i] != n {
+			out[i] += "*"
+		}
+	}
+	return out
+}
 
 func internalRules() [][]string {
 	out := make([][]string, len(internalIfaces))

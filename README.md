@@ -125,8 +125,12 @@ IPT-Lens keeps its own chains: `IPTLENS-IN-*`, jumped from the top of `INPUT`,
 and `IPTLENS-DK-*`, jumped from the top of `DOCKER-USER` for published container
 ports (Docker sends those past `INPUT`). Packets it allows go back to your own
 rules with `RETURN`, so rules you wrote by hand still apply. Loopback,
-established connections, ICMP, the DHCP client and traffic from Docker bridges
-are always allowed. IPT-Lens' own port never drops below "VPN only", and a
+established connections, ICMP and the DHCP client are always allowed, and so is
+traffic from local containers, pods and VMs (`docker0`, `br-*`, `cni0`, `cali*`,
+`lxc*`, `virbr*`). Overlay tunnels such as `flannel.1` are filtered, since their
+traffic comes from other hosts: on a Kubernetes node, allow node-to-node ports
+explicitly. If you have a bridge named `br-*` that connects to an outside
+network, it is trusted too; filter it in the Advanced view. IPT-Lens' own port never drops below "VPN only", and a
 warning appears before SSH or your VPN's own port (WireGuard, Tailscale,
 OpenVPN) leaves "Everyone".
 

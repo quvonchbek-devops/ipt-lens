@@ -52,7 +52,8 @@ tcp|udp, level enum, interface name regex, parsed CIDR), never from client text.
    `iptlens:v1 default=<level> vpn=<if,...>;<cidr,...>`
 2. `-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN`
 3. `-p icmp -j RETURN`, `-p udp --dport 68 -j RETURN`
-4. `-i docker0 -j RETURN`, `-i br-+ -j RETURN`
+4. `RETURN` for local container/pod/VM interfaces: `docker0`, `br-+`, `cni0`,
+   `cali+`, `lxc+`, `virbr+` (not overlay tunnels, whose traffic is remote)
 5. per port: Everyone → `RETURN`; VPN only → `RETURN` per VPN interface and
    subnet, then `DROP`; Nobody → `DROP`. Comment `iptlens:port=<n>/<proto>
    level=<level>`.
@@ -63,7 +64,7 @@ tcp|udp, level enum, interface name regex, parsed CIDR), never from client text.
 
 `IPTLENS-DK-x` only judges connections to published ports:
 1. `-m conntrack ! --ctstate DNAT -j RETURN` (metadata comment)
-2. `-i docker0 -j RETURN`, `-i br-+ -j RETURN`
+2. the same internal-interface `RETURN`s
 3. per port: same levels, matched with `-p <proto> -m conntrack
    --ctorigdstport <n>`
 4. default: same as `INPUT`, restricted to `--ctstate DNAT`.
