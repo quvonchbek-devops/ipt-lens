@@ -80,12 +80,12 @@ var vpnServices = map[string]bool{"WireGuard": true, "Tailscale": true, "OpenVPN
 func ipv6Notes(available, covered, configured bool) string {
 	switch {
 	case !available:
-		return "ip6tables is not available, so IPv6 traffic is not filtered. If this server has a public IPv6 address, protect it separately."
+		return "IPv6 is not filtered: ip6tables is not installed. If this server has a public IPv6 address, everything on it is open."
 	case configured && !covered:
-		return "IPv6 does not carry the current policy (it was applied before IPv6 support, changed by hand, or ip6tables " +
-			"could not be read). Review and apply again so IPv6 is covered."
+		return "IPv6 is not protected by these settings yet. Review and apply once to fix it."
 	}
-	return "The policy applies to IPv6 too. VPN subnets are IPv4 only; over IPv6 the VPN is recognised by its interface, plus IPv6 trusted addresses."
+	// When "VPN only" lets nobody in over one family, the review warns.
+	return "IPv6 is protected the same way."
 }
 
 func (s *Server) ipv6Coverage(st *iptables.SystemState) (available, covered bool) {

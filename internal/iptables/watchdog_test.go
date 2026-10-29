@@ -22,6 +22,8 @@ type fakeIPT struct {
 	save   string
 	save6  string // empty: ip6tables is not available
 	fail6  bool   // ip6tables is installed but cannot be read
+	fresh6 bool   // ip6tables is installed, IPv6 is on, and no IPv6 table exists yet
+	noIPv6 bool   // the kernel runs with ipv6.disable=1
 	// query answers read-only calls (-C, -S); they are not recorded in calls.
 	// Without it, -C finds every rule and -S lists none.
 	query func(cmd string) (string, error)
@@ -67,6 +69,9 @@ func installFake(t *testing.T) *fakeIPT {
 	runSave = func() ([]byte, error) { return []byte(f.save), nil }
 	runSaveRules = func() ([]byte, error) { return []byte(f.save), nil }
 	save6 := func() ([]byte, error) {
+		if f.fresh6 {
+			return nil, nil // nf_tables creates tables on first use: nothing to list yet
+		}
 		if f.save6 == "" || f.fail6 {
 			return nil, errors.New("ip6tables-save failed")
 		}
@@ -98,12 +103,13 @@ func installFake(t *testing.T) *fakeIPT {
 	}
 	oldRestore, oldRestore6 := runRestore, runRestore6
 	runRestore, runRestore6 = restore(""), restore("-6 ")
-	oldHave6 := haveIP6
-	haveIP6 = func() bool { return f.save6 != "" || f.fail6 }
+	oldHave6, oldEnabled6 := haveIP6, ipv6Enabled
+	haveIP6 = func() bool { return f.save6 != "" || f.fail6 || f.fresh6 }
+	ipv6Enabled = func() bool { return !f.noIPv6 && (f.save6 != "" || f.fail6 || f.fresh6) }
 	t.Cleanup(func() {
 		runIPT, runSave, runSaveRules = oldIPT, oldSave, oldRules
 		runIP6T, runSave6, runSaveRules6 = oldIP6T, oldSave6, oldRules6
-		haveIP6 = oldHave6
+		haveIP6, ipv6Enabled = oldHave6, oldEnabled6
 		runRestore, runRestore6 = oldRestore, oldRestore6
 	})
 	return f

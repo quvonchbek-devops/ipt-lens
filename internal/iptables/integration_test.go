@@ -382,3 +382,31 @@ func TestIntegrationLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A fresh nf_tables host has no IPv6 filter table until the first rule; the
+// policy must still cover IPv6 (an earlier version skipped it).
+func TestIntegrationIPv6BeforeAnyIPv6Table(t *testing.T) {
+	integration(t)
+	if _, err := exec.LookPath("nft"); err != nil {
+		t.Skip("needs nft to remove the IPv6 filter table")
+	}
+	if out, err := exec.Command("nft", "delete", "table", "ip6", "filter").CombinedOutput(); err != nil {
+		t.Skipf("cannot remove the IPv6 filter table (legacy backend?): %v: %s", err, out)
+	}
+	if out, _ := runSaveRules6(); strings.Contains(string(out), "*filter") {
+		t.Fatalf("the IPv6 filter table is still there:\n%s", out)
+	}
+	w, err := NewWatchdog(privateDir(t), false, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.ApplyAccess(samplePolicy()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ReadAccess(liveState(t, true)); !ok {
+		t.Fatal("IPv6 left without the policy on a host that had no IPv6 table yet")
+	}
+	if err := w.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+}

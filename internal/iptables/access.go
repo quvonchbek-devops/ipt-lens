@@ -523,9 +523,6 @@ func (w *Watchdog) ApplyAccess(p AccessPolicy) error {
 			return plan{}, fmt.Errorf("the IPv6 firewall cannot be read, so the policy cannot cover IPv6; nothing was changed: %w", err)
 		}
 		if present {
-			if st6.Tables["filter"] == nil {
-				return plan{}, fmt.Errorf("the IPv6 filter table is missing, so the policy cannot cover IPv6; nothing was changed")
-			}
 			if err := family(st6.Tables["filter"], []string{v6Flag}, true); err != nil {
 				return plan{}, err
 			}

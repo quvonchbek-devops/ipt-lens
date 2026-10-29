@@ -73,16 +73,28 @@ var haveIP6 = func() bool {
 	return err == nil
 }
 
+// ipv6Enabled reports whether the kernel has IPv6 (it is off with
+// ipv6.disable=1). It is not inferred from ip6tables-save: with nf_tables a
+// fresh host lists no IPv6 tables until the first rule is added.
+var ipv6Enabled = func() bool {
+	_, err := os.Stat("/proc/net/if_inet6")
+	return err == nil
+}
+
 // ipv6State returns the live ip6tables ruleset. present is false when the
 // host has no IPv6 firewall to manage: ip6tables is missing, or the kernel
-// has IPv6 disabled (ip6tables-save lists no tables).
+// has IPv6 disabled. A filter table that does not exist yet is returned
+// empty; ip6tables creates it with the first rule.
 func ipv6State() (st *SystemState, present bool, err error) {
-	if !haveIP6() {
+	if !haveIP6() || !ipv6Enabled() {
 		return nil, false, nil
 	}
 	st, err = currentState6()
 	if err != nil {
 		return nil, true, err
 	}
-	return st, len(st.Tables) > 0, nil
+	if st.Tables["filter"] == nil {
+		st.Tables["filter"] = &Table{Name: "filter", Chains: map[string]*Chain{}}
+	}
+	return st, true, nil
 }

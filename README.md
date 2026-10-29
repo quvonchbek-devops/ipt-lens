@@ -57,6 +57,18 @@ make demo            # http://127.0.0.1:8090, sample data, the firewall is never
 
 Requires Go 1.21 or newer.
 
+## Try it on a real firewall, without a server
+
+`scripts/lab.sh` runs IPT-Lens in a throwaway network namespace with its own
+iptables, so your machine's firewall is never touched. The lab has an
+"internet" path (10.204.0.2) and a "VPN" path (10.203.0.2, interface `wg-lab`)
+and sample services on 22, 80, 443, 5432 and 6379, so you can check with
+`curl` what each setting lets through. Ctrl+C removes it.
+
+```
+go build -o ipt-lens ./cmd/server && sudo scripts/lab.sh ./ipt-lens
+```
+
 ## Install on a server
 
 Download a release archive from the

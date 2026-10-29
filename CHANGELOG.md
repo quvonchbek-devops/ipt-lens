@@ -12,8 +12,18 @@ Beta for testing on a real server (in a VM first). The simple view gets most
 of the changes; everything that touches the firewall now also runs against
 real iptables and ip6tables in CI.
 
+### Fixed
+
+- On a fresh host with the nf_tables backend, IPv6 has no filter table until
+  the first rule, and IPT-Lens took that for "no IPv6": the simple view left
+  IPv6 open and said ip6tables was missing. IPv6 is now detected from the
+  kernel (`/proc/net/if_inet6`) and the table is created when needed.
+
 ### Added
 
+- `scripts/lab.sh`: try IPT-Lens on a real firewall without a server. It
+  builds a throwaway network namespace with an "internet" and a "VPN" path and
+  sample services, so the machine's own firewall is never touched.
 - Each port in the simple view shows the program listening on it (`sshd`,
   `nginx`, ...), read from `/proc/<pid>/fd` and `/proc/<pid>/comm`.
 - **Trusted addresses** in the simple view: IPv4 or IPv6 addresses or ranges,

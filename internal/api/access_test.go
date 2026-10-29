@@ -208,13 +208,13 @@ func TestAccessNotesWhenIPv6Filtered(t *testing.T) {
 	rec := do(t, newTestServer(t, ""), http.MethodGet, "/api/v1/access", "")
 	var v accessView
 	_ = json.Unmarshal(rec.Body.Bytes(), &v)
-	if !strings.Contains(v.Notes[0], "applies to IPv6 too") {
+	if v.Notes[0] != "IPv6 is protected the same way." {
 		t.Fatalf("notes = %q", v.Notes)
 	}
 	if got := ipv6Notes(false, false, true); !strings.Contains(got, "not filtered") {
 		t.Fatalf("unavailable note = %q", got)
 	}
-	if got := ipv6Notes(true, false, true); !strings.Contains(got, "apply again") {
+	if got := ipv6Notes(true, false, true); !strings.Contains(got, "apply once") {
 		t.Fatalf("stale IPv6 note = %q", got)
 	}
 }

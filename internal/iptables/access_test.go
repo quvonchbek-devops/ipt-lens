@@ -507,8 +507,9 @@ func TestIPv6DisabledKernelIsNotAnError(t *testing.T) {
 	f := installFake(t)
 	f.save = v6Base
 	f.save6 = "# ip6tables-save on a kernel booted with ipv6.disable=1\n"
+	f.noIPv6 = true
 	if IPv6Available() {
-		t.Fatal("no IPv6 tables, but IPv6 reported available")
+		t.Fatal("IPv6 is off in the kernel, but reported available")
 	}
 	w := newTestWatchdog(t, time.Hour)
 	if err := w.ApplyAccess(samplePolicy()); err != nil {
@@ -674,5 +675,22 @@ func TestLimitOnlyForPublicTCP(t *testing.T) {
 		if err := p.Validate(); err == nil {
 			t.Errorf("accepted %+v", pa)
 		}
+	}
+}
+
+func TestApplyAccessCoversIPv6BeforeAnyIPv6Table(t *testing.T) {
+	// A fresh nf_tables host lists no IPv6 tables until the first rule. That
+	// is not "no IPv6": the policy must still be applied to it.
+	f := installFake(t)
+	f.save = v6Base
+	f.fresh6 = true
+	w := newTestWatchdog(t, time.Hour)
+	if err := w.ApplyAccess(samplePolicy()); err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, f.Calls(), "-6 -t filter -N IPTLENS-IN-A")
+	mustContain(t, f.Calls(), "-6 -t filter -I INPUT 1 -m comment --comment iptlens:jump -j IPTLENS-IN-A")
+	if available, _ := IPv6Coverage(mustParse(t, v6Base)); !available {
+		t.Fatal("IPv6 reported as unavailable on a host that has it")
 	}
 }
