@@ -350,3 +350,35 @@ func TestIntegrationTrustedAddresses(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestIntegrationLimit(t *testing.T) {
+	integration(t)
+	w, err := NewWatchdog(privateDir(t), false, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh(t, "iptables -N DOCKER-USER", "ip6tables -N DOCKER-USER")
+	p := limitedPolicy()
+	if err := w.ApplyAccess(p); err != nil {
+		t.Fatal(err)
+	}
+	for _, v6 := range []bool{false, true} {
+		if got, ok := ReadAccess(liveState(t, v6)); !ok || !reflect.DeepEqual(got, p) {
+			t.Fatalf("v6=%v: read back %+v (ok=%v), want %+v", v6, got, ok, p)
+		}
+	}
+	out, err := exec.Command("iptables", "-S", "IPTLENS-IN-A").CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "--hashlimit-name iptl-in-22") {
+		t.Fatalf("limit rule missing: %v\n%s", err, out)
+	}
+	// A second apply builds the B chains with the same hashlimit names.
+	if _, err := w.Confirm(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.ApplyAccess(p); err != nil {
+		t.Fatalf("re-applying with the same limit: %v", err)
+	}
+	if _, err := w.Confirm(); err != nil {
+		t.Fatal(err)
+	}
+}

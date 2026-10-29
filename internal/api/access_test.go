@@ -270,3 +270,13 @@ func TestPinLensPortNeedsIPv4Access(t *testing.T) {
 		t.Fatal("panel port pinned to VPN only although nothing reaches it over IPv4")
 	}
 }
+
+func TestAccessPreviewLimit(t *testing.T) {
+	_, p := preview(t, `{"vpn":{"ifaces":["wg0"],"subnets":[]},"default":"public",
+		"ports":[{"port":22,"proto":"tcp","level":"public","limit":true}]}`)
+	if !slices.ContainsFunc(p.Changes, func(c string) bool {
+		return strings.Contains(c, "SSH") && strings.Contains(c, "slow down password guessing")
+	}) {
+		t.Fatalf("changes = %q", p.Changes)
+	}
+}

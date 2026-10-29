@@ -309,13 +309,30 @@ func previewOf(cur, next iptables.AccessPolicy, rows []accessRow, ipv6 bool) acc
 		}
 		return sorted[i].proto < sorted[j].proto
 	})
+	limited := func(p iptables.AccessPolicy, k key) bool {
+		for _, pa := range p.Ports {
+			if pa.Port == k.port && pa.Proto == k.proto {
+				return pa.Limit
+			}
+		}
+		return false
+	}
 	for _, k := range sorted {
 		from, _ := levelOf(cur, k.port, k.proto)
 		to, _ := levelOf(next, k.port, k.proto)
 		if from == to {
+			if a, b := limited(cur, k), limited(next, k); a != b {
+				verb := map[bool]string{true: "slow down password guessing (at most 6 new connections a minute per address)",
+					false: "stop slowing down password guessing"}[b]
+				pv.Changes = append(pv.Changes, fmt.Sprintf("%s: %s", rowLabel(k.port, k.proto, names[k]), verb))
+			}
 			continue
 		}
 		pv.Changes = append(pv.Changes, fmt.Sprintf("%s: %s → %s", rowLabel(k.port, k.proto, names[k]), levelLabel[from], levelLabel[to]))
+		if limited(next, k) {
+			pv.Changes = append(pv.Changes, fmt.Sprintf("%s: slow down password guessing (at most 6 new connections a minute per address)",
+				rowLabel(k.port, k.proto, names[k])))
+		}
 		if vpnServices[names[k]] && from == iptables.LevelPublic {
 			pv.Warnings = append(pv.Warnings, fmt.Sprintf(
 				"%s is your VPN's own port: devices connect to it from the internet. Setting it to %s disconnects the VPN. "+

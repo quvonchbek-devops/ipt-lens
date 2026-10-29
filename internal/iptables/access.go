@@ -52,7 +52,12 @@ type PortAccess struct {
 	Port  int    `json:"port"`
 	Proto string `json:"proto"`
 	Level Level  `json:"level"`
+	// Limit slows down password guessing on a port open to everyone: each
+	// source address gets at most limitRate new connections, the rest dropped.
+	Limit bool `json:"limit,omitempty"`
 }
+
+const limitRate = "6/minute"
 
 // AccessPolicy is the simple view's whole state: a level per port plus a
 // default for every other port, applied to host services and Docker-published
@@ -154,6 +159,9 @@ func (p AccessPolicy) Validate() error {
 		if !validLevel(pa.Level) {
 			return invalidf("unknown level %q for port %d", pa.Level, pa.Port)
 		}
+		if pa.Limit && (pa.Proto != "tcp" || pa.Level != LevelPublic) {
+			return invalidf("slowing down guesses works only on a TCP port open to everyone (port %d)", pa.Port)
+		}
 		key := fmt.Sprintf("%d/%s", pa.Port, pa.Proto)
 		if seen[key] {
 			return invalidf("port %s listed twice", key)
@@ -215,10 +223,19 @@ func (p AccessPolicy) metaComment() string {
 
 // levelRules returns the rules for one level: match narrows the packet, note is
 // the rule comment. VPN subnets are IPv4, so v6 rules use interfaces only.
-func (p AccessPolicy) levelRules(level Level, match []string, note string, v6 bool) [][]string {
+//
+// limit, when set, names the hashlimit table that slows new connections to a
+// public port; it must be unique per chain kind and port (at most 15 bytes).
+func (p AccessPolicy) levelRules(level Level, match []string, note string, v6 bool, limit string) [][]string {
 	switch level {
 	case LevelPublic:
-		return [][]string{cat(match, comment(note), []string{"-j", "RETURN"})}
+		var out [][]string
+		if limit != "" {
+			out = append(out, cat(match, []string{"-m", "conntrack", "--ctstate", "NEW", "-m", "hashlimit",
+				"--hashlimit-above", limitRate, "--hashlimit-burst", "6", "--hashlimit-mode", "srcip",
+				"--hashlimit-name", limit}, comment(note), []string{"-j", "DROP"}))
+		}
+		return append(out, cat(match, comment(note), []string{"-j", "RETURN"}))
 	case LevelClosed:
 		return [][]string{cat(match, comment(note), []string{"-j", "DROP"})}
 	}
@@ -241,7 +258,19 @@ func (p AccessPolicy) levelRules(level Level, match []string, note string, v6 bo
 }
 
 func portNote(pa PortAccess) string {
-	return fmt.Sprintf("iptlens:port=%d/%s level=%s", pa.Port, pa.Proto, pa.Level)
+	s := fmt.Sprintf("iptlens:port=%d/%s level=%s", pa.Port, pa.Proto, pa.Level)
+	if pa.Limit {
+		s += " limit"
+	}
+	return s
+}
+
+// limitName names a port's hashlimit table: kind is "in" or "dk".
+func limitName(kind string, pa PortAccess) string {
+	if !pa.Limit {
+		return ""
+	}
+	return fmt.Sprintf("iptl-%s-%d", kind, pa.Port)
 }
 
 // inputRules generates the IPTLENS-IN chain for filter/INPUT.
@@ -264,10 +293,10 @@ func inputRules(p AccessPolicy, v6 bool) [][]string {
 	rules = append(rules, internalRules()...)
 	for _, pa := range p.Ports {
 		match := []string{"-p", pa.Proto, "--dport", strconv.Itoa(pa.Port)}
-		rules = append(rules, p.levelRules(pa.Level, match, portNote(pa), v6)...)
+		rules = append(rules, p.levelRules(pa.Level, match, portNote(pa), v6, limitName("in", pa))...)
 	}
 	if p.Default != LevelPublic {
-		rules = append(rules, p.levelRules(p.Default, nil, commentDef, v6)...)
+		rules = append(rules, p.levelRules(p.Default, nil, commentDef, v6, "")...)
 	}
 	return rules
 }
@@ -282,10 +311,10 @@ func dockerRules(p AccessPolicy, v6 bool) [][]string {
 	rules = append(rules, internalRules()...)
 	for _, pa := range p.Ports {
 		match := []string{"-p", pa.Proto, "-m", "conntrack", "--ctorigdstport", strconv.Itoa(pa.Port)}
-		rules = append(rules, p.levelRules(pa.Level, match, portNote(pa), v6)...)
+		rules = append(rules, p.levelRules(pa.Level, match, portNote(pa), v6, limitName("dk", pa))...)
 	}
 	if p.Default != LevelPublic {
-		rules = append(rules, p.levelRules(p.Default, nil, commentDef, v6)...)
+		rules = append(rules, p.levelRules(p.Default, nil, commentDef, v6, "")...)
 	}
 	return rules
 }
@@ -343,6 +372,7 @@ func ReadAccess(st *SystemState) (AccessPolicy, bool) {
 			continue
 		}
 		spec, lvl, _ := strings.Cut(rest, " level=")
+		lvl, flag, _ := strings.Cut(lvl, " ")
 		if seen[spec] {
 			continue
 		}
@@ -352,7 +382,7 @@ func ReadAccess(st *SystemState) (AccessPolicy, bool) {
 		if err != nil {
 			continue
 		}
-		p.Ports = append(p.Ports, PortAccess{Port: n, Proto: proto, Level: Level(lvl)})
+		p.Ports = append(p.Ports, PortAccess{Port: n, Proto: proto, Level: Level(lvl), Limit: flag == "limit"})
 	}
 	return p, true
 }

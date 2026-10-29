@@ -167,6 +167,10 @@ step with IPv4: if either fails, both roll back. ICMPv6 (needed for neighbour
 discovery) and the DHCPv6 client from link-local addresses are always allowed.
 VPN subnets are IPv4, so over IPv6 the VPN is recognised by its interface only.
 
+When SSH is open to everyone, one checkbox **slows down password guessing**:
+each source address gets at most 6 new connections a minute, the rest are
+dropped (`-m hashlimit`, per address).
+
 **Trusted addresses** (for example an office IP, IPv4 or IPv6) are let in
 wherever "VPN only" is set, with or without a VPN, so a team without a VPN can
 still keep a database reachable from the office only. They are matched by

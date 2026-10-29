@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -632,5 +633,46 @@ func TestVPNReaches(t *testing.T) {
 	}
 	if ifc := (VPN{Ifaces: []string{"wg0"}}); !ifc.Reaches(false) || !ifc.Reaches(true) {
 		t.Fatal("an interface covers both families")
+	}
+}
+
+func limitedPolicy() AccessPolicy {
+	return AccessPolicy{
+		VPN:     VPN{Ifaces: []string{"wg0"}},
+		Default: LevelVPN,
+		Ports:   []PortAccess{{Port: 22, Proto: "tcp", Level: LevelPublic, Limit: true}},
+	}
+}
+
+func TestLimitSlowsNewConnectionsBeforeReturn(t *testing.T) {
+	in := joinRules(inputRules(limitedPolicy(), false))
+	drop := slices.IndexFunc(in, func(r string) bool { return strings.Contains(r, "--hashlimit-above") })
+	ret := slices.Index(in, "-p tcp --dport 22 -m comment --comment iptlens:port=22/tcp level=public limit -j RETURN")
+	if drop < 0 || ret < 0 || drop > ret {
+		t.Fatalf("want the hashlimit DROP before the RETURN:\n%s", strings.Join(in, "\n"))
+	}
+	if want := "-p tcp --dport 22 -m conntrack --ctstate NEW -m hashlimit --hashlimit-above 6/minute --hashlimit-burst 6 " +
+		"--hashlimit-mode srcip --hashlimit-name iptl-in-22 -m comment --comment iptlens:port=22/tcp level=public limit -j DROP"; in[drop] != want {
+		t.Fatalf("limit rule = %q\nwant        %q", in[drop], want)
+	}
+	dk := strings.Join(joinRules(dockerRules(limitedPolicy(), false)), "\n")
+	if !strings.Contains(dk, "--hashlimit-name iptl-dk-22") {
+		t.Fatalf("container chain lacks its own limit:\n%s", dk)
+	}
+	got, ok := ReadAccess(mustParse(t, saveWith(limitedPolicy(), "A", false)))
+	if !ok || !reflect.DeepEqual(got, limitedPolicy()) {
+		t.Fatalf("ReadAccess = %+v, want %+v", got, limitedPolicy())
+	}
+}
+
+func TestLimitOnlyForPublicTCP(t *testing.T) {
+	for _, pa := range []PortAccess{
+		{Port: 53, Proto: "udp", Level: LevelPublic, Limit: true},
+		{Port: 22, Proto: "tcp", Level: LevelVPN, Limit: true},
+	} {
+		p := AccessPolicy{VPN: VPN{Ifaces: []string{"wg0"}}, Default: LevelPublic, Ports: []PortAccess{pa}}
+		if err := p.Validate(); err == nil {
+			t.Errorf("accepted %+v", pa)
+		}
 	}
 }

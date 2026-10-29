@@ -75,15 +75,20 @@
       const a = levelIn(base, r.port, r.proto);
       const b = levelIn(draft, r.port, r.proto);
       if ((a.explicit || b.explicit) && a.level !== b.level) n++;
+      else if (limitIn(base, r.port, r.proto) !== limitIn(draft, r.port, r.proto)) n++;
     });
     return n;
   }
 
   function setLevel(port, proto, level) {
     const e = draft.ports.find((x) => x.port === port && x.proto === proto);
-    if (e) e.level = level;
-    else draft.ports.push({ port, proto, level });
+    if (e) {
+      e.level = level;
+      if (level !== "public") delete e.limit; // slowing down only applies to "Everyone"
+    } else draft.ports.push({ port, proto, level });
   }
+
+  const limitIn = (p, port, proto) => !!(p.ports.find((x) => x.port === port && x.proto === proto) || {}).limit;
 
   /* ---------- mode ---------- */
   function setMode(mode) {
@@ -214,11 +219,28 @@
     rows.forEach((r) => {
       const cur = levelIn(draft, r.port, r.proto);
       const was = levelIn(base, r.port, r.proto).level;
-      const row = L.el("div", "s-row" + (cur.level !== was ? " changed" : ""));
+      const changed = cur.level !== was || limitIn(base, r.port, r.proto) !== limitIn(draft, r.port, r.proto);
+      const row = L.el("div", "s-row" + (changed ? " changed" : ""));
       const port = L.el("div", "s-port mono", String(r.port));
       if (r.proto !== "tcp") port.append(L.el("span", "s-proto", "/" + r.proto));
       const what = L.el("div", "s-what");
       what.innerHTML = describe(r, cur.level === "public");
+      // SSH open to everyone attracts password guessing; offer to slow it down.
+      if (r.name === "SSH" && r.proto === "tcp" && cur.level === "public") {
+        const l = L.el("label", "check s-limit");
+        const c = L.el("input");
+        c.type = "checkbox";
+        c.checked = limitIn(draft, r.port, r.proto);
+        c.addEventListener("change", () => {
+          setLevel(r.port, r.proto, "public");
+          draft.ports.find((x) => x.port === r.port && x.proto === r.proto).limit = c.checked || undefined;
+          render();
+        });
+        const txt = L.el("span", "", "Slow down password guessing");
+        txt.append(L.el("span", "tert", " · 6 new connections a minute per address"));
+        l.append(c, txt);
+        what.append(l);
+      }
       row.append(port, what, levelButtons(r.port, r.proto, cur.level, {
         locked: r.locked,
         onPick: (lvl) => { setLevel(r.port, r.proto, lvl); render(); },

@@ -13,6 +13,9 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - **Trusted addresses** in the simple view: IPv4 or IPv6 addresses or ranges,
   such as an office IP, let in wherever "VPN only" is set, with or without a
   VPN. Ranges wider than /8 (IPv4) or /16 (IPv6) are refused.
+- **Slow down password guessing** on SSH when it is open to everyone: each
+  source address gets at most 6 new connections a minute (`hashlimit`), on the
+  host and container chains.
 - **Undo now** next to **Keep this change** (the confirm button, renamed):
   undoes a pending change at once instead of waiting for the timer.
   `POST /api/v1/rollback`.
