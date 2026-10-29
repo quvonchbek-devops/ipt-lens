@@ -2,6 +2,7 @@ package iptables
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -551,5 +552,85 @@ func TestRestoreInputRejectsUnsafeArgs(t *testing.T) {
 	}
 	if _, err := restoreInput("IPTLENS-IN-A", [][]string{{"-p", "tcp", "--dport", "22", "-j", "RETURN"}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func trustedPolicy() AccessPolicy {
+	return AccessPolicy{
+		VPN:     VPN{Ifaces: []string{"wg0"}, Trusted: []string{"203.0.113.7", "2001:db8::/48"}},
+		Default: LevelClosed,
+		Ports:   []PortAccess{{Port: 5432, Proto: "tcp", Level: LevelVPN}},
+	}
+}
+
+func TestTrustedAddressesAlongsideVPN(t *testing.T) {
+	v4 := strings.Join(joinRules(inputRules(trustedPolicy(), false)), "\n")
+	v6 := strings.Join(joinRules(inputRules(trustedPolicy(), true)), "\n")
+	for _, want := range []string{
+		"-i wg0 -p tcp --dport 5432 -m comment --comment iptlens:port=5432/tcp level=vpn -j RETURN",
+		"-s 203.0.113.7 -p tcp --dport 5432 -m comment --comment iptlens:port=5432/tcp level=vpn -j RETURN",
+	} {
+		if !strings.Contains(v4, want) {
+			t.Errorf("IPv4 rules lack %q:\n%s", want, v4)
+		}
+	}
+	if strings.Contains(v4, "-s 2001:db8") || strings.Contains(v6, "-s 203.0.113.7") {
+		t.Fatal("a trusted address landed in the other family's rules")
+	}
+	if !strings.Contains(v6, "-s 2001:db8::/48 -p tcp --dport 5432") {
+		t.Fatalf("IPv6 rules lack the trusted IPv6 range:\n%s", v6)
+	}
+	dk := strings.Join(joinRules(dockerRules(trustedPolicy(), false)), "\n")
+	if !strings.Contains(dk, "-s 203.0.113.7 -p tcp -m conntrack --ctorigdstport 5432") {
+		t.Fatalf("container rules lack the trusted address:\n%s", dk)
+	}
+}
+
+func TestTrustedOnlyIsEnoughForVPNLevel(t *testing.T) {
+	p := AccessPolicy{VPN: VPN{Trusted: []string{"198.51.100.0/24"}}, Default: LevelVPN}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("trusted addresses alone refused: %v", err)
+	}
+}
+
+func TestTrustedValidation(t *testing.T) {
+	for _, bad := range []string{"0.0.0.0/0", "::/0", "10.0.0.0/7", "2001::/15", "example.com", "1.2.3.4/33", "-j ACCEPT",
+		"::ffff:203.0.113.7", "::ffff:0:0/8", "10.1.2.3/8", "2001:db8::1/48"} {
+		p := AccessPolicy{VPN: VPN{Trusted: []string{bad}}, Default: LevelPublic}
+		if err := p.Validate(); err == nil {
+			t.Errorf("accepted trusted address %q", bad)
+		}
+	}
+	long := AccessPolicy{Default: LevelPublic}
+	for i := 0; i < 8; i++ {
+		long.VPN.Trusted = append(long.VPN.Trusted, fmt.Sprintf("2001:db8:aaaa:bbbb:cccc:dddd:eeee:%04x/128", i))
+	}
+	if err := long.Validate(); err == nil {
+		t.Fatal("accepted a policy whose metadata does not fit in an iptables comment")
+	}
+}
+
+func TestReadAccessTrustedRoundTrip(t *testing.T) {
+	got, ok := ReadAccess(mustParse(t, saveWith(trustedPolicy(), "A", false)))
+	if !ok || !reflect.DeepEqual(got, trustedPolicy()) {
+		t.Fatalf("ReadAccess = %+v (ok=%v), want %+v", got, ok, trustedPolicy())
+	}
+	// A comment written before trusted addresses existed has two parts.
+	old := strings.Replace(saveWith(samplePolicy(), "A", false), "vpn=wg0;100.64.0.0/10", "vpn=wg0;100.64.0.0/10", 1)
+	if got, _ := ReadAccess(mustParse(t, old)); got.VPN.Trusted != nil {
+		t.Fatalf("old comment read with trusted = %q", got.VPN.Trusted)
+	}
+}
+
+func TestVPNReaches(t *testing.T) {
+	v6only := VPN{Trusted: []string{"2001:db8::5"}}
+	if v6only.Reaches(false) || !v6only.Reaches(true) {
+		t.Fatal("an IPv6 trusted address alone reaches IPv4, or not IPv6")
+	}
+	if sub := (VPN{Subnets: []string{"10.8.0.0/24"}}); !sub.Reaches(false) || sub.Reaches(true) {
+		t.Fatal("a subnet is IPv4 only")
+	}
+	if ifc := (VPN{Ifaces: []string{"wg0"}}); !ifc.Reaches(false) || !ifc.Reaches(true) {
+		t.Fatal("an interface covers both families")
 	}
 }

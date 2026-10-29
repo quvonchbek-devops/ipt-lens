@@ -320,3 +320,33 @@ func TestIntegrationDockerLockedAndPersisted(t *testing.T) {
 		t.Fatalf("the persist file does not load: %v: %s\n%s", err, out, s)
 	}
 }
+
+func TestIntegrationTrustedAddresses(t *testing.T) {
+	integration(t)
+	w, err := NewWatchdog(privateDir(t), false, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := trustedPolicy()
+	if err := w.ApplyAccess(p); err != nil {
+		t.Fatal(err)
+	}
+	for _, v6 := range []bool{false, true} {
+		if got, ok := ReadAccess(liveState(t, v6)); !ok || !reflect.DeepEqual(got, p) {
+			t.Fatalf("v6=%v: read back %+v (ok=%v), want %+v", v6, got, ok, p)
+		}
+	}
+	for _, c := range [][]string{
+		{"iptables", "-C", "IPTLENS-IN-A", "-s", "203.0.113.7", "-p", "tcp", "--dport", "5432", "-m", "comment",
+			"--comment", "iptlens:port=5432/tcp level=vpn", "-j", "RETURN"},
+		{"ip6tables", "-C", "IPTLENS-IN-A", "-s", "2001:db8::/48", "-p", "tcp", "--dport", "5432", "-m", "comment",
+			"--comment", "iptlens:port=5432/tcp level=vpn", "-j", "RETURN"},
+	} {
+		if out, err := exec.Command(c[0], c[1:]...).CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v: %s", strings.Join(c, " "), err, out)
+		}
+	}
+	if err := w.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+}

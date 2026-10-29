@@ -38,6 +38,7 @@
     n.vpn = n.vpn || {};
     n.vpn.ifaces = n.vpn.ifaces || [];
     n.vpn.subnets = n.vpn.subnets || [];
+    n.vpn.trusted = n.vpn.trusted || [];
     n.ports = n.ports || [];
     // Without a policy nothing is filtered: everything is open to everyone.
     if (!configured || !n.default) n.default = "public";
@@ -49,8 +50,9 @@
     return e ? { level: e.level, explicit: true } : { level: p.default, explicit: false };
   }
 
-  const hasVPN = (p) => p.vpn.ifaces.length + p.vpn.subnets.length > 0;
-  const vpnText = (p) => [...p.vpn.ifaces, ...p.vpn.subnets].join(", ");
+  // "VPN only" lets in the VPN and the trusted addresses.
+  const hasVPN = (p) => p.vpn.ifaces.length + p.vpn.subnets.length + p.vpn.trusted.length > 0;
+  const vpnText = (p) => [...p.vpn.ifaces, ...p.vpn.subnets, ...p.vpn.trusted].join(", ");
 
   // Every row to show: discovered ports plus ports only the draft mentions.
   function allRows() {
@@ -123,7 +125,7 @@
       b.type = "button";
       b.setAttribute("aria-pressed", String(current === lvl));
       let why = "";
-      if (lvl === "vpn" && !hasVPN(draft)) why = "Choose your VPN first";
+      if (lvl === "vpn" && !hasVPN(draft)) why = "Choose your VPN or add a trusted address first";
       if (lvl === "closed" && opts.locked) why = "IPT-Lens' own port stays reachable over the VPN, so you cannot lock yourself out";
       if (why) {
         b.disabled = true;
@@ -181,13 +183,27 @@
     if (!list.children.length) {
       list.append(L.el("p", "hint", "No VPN interface found (wg*, tailscale*, tun*, zt*). Add your VPN subnet below."));
     }
+    const tl = $("s-trusted-list");
+    tl.innerHTML = "";
+    draft.vpn.trusted.forEach((v) => {
+      const b = L.el("button", "s-chip");
+      b.type = "button";
+      b.setAttribute("aria-pressed", "true");
+      b.setAttribute("aria-label", `Remove ${v}`);
+      b.innerHTML = `<span class="mono">${L.esc(v)}</span> <span aria-hidden="true">×</span>`;
+      b.addEventListener("click", () => {
+        draft.vpn.trusted = draft.vpn.trusted.filter((x) => x !== v);
+        render();
+      });
+      tl.append(b);
+    });
     const folded = hasVPN(draft) && !vpnOpen;
     $("s-vpn-edit").hidden = folded;
     $("s-vpn-change").hidden = !folded;
     $("s-vpn-card").classList.toggle("folded", folded);
     $("s-vpn-status").innerHTML = hasVPN(draft)
       ? `<span class="mono">${L.esc(vpnText(draft))}</span>`
-      : "Pick the one your devices connect through. “VPN only” needs it.";
+      : "Pick the VPN your devices connect through, or add a trusted address. “VPN only” needs one of them.";
   }
 
   function renderRows() {
@@ -232,7 +248,7 @@
     const risky = open.filter((r) => r.risk);
     // A VPN endpoint must stay reachable from the internet, or the VPN goes down
     // and "VPN only" locks everyone out.
-    const endpoints = hasVPN(draft)
+    const endpoints = draft.vpn.ifaces.length + draft.vpn.subnets.length > 0
       ? allRows().filter((r) => VPN_ENDPOINTS.has(r.name) && levelIn(draft, r.port, r.proto).level !== "public")
       : [];
     const portList = (rows, withRisk) => {
@@ -463,7 +479,7 @@
         { label: "Continue to review", cls: "btn-primary", onClick: () => {
           const n = Number(port.value.trim());
           if (!Number.isInteger(n) || n < 1 || n > 65535) { L.toast("Port must be a number from 1 to 65535.", "error"); return; }
-          if (who.value === "vpn" && !hasVPN(draft)) { L.toast("Choose your VPN first, in the “Your VPN” box.", "error"); return; }
+          if (who.value === "vpn" && !hasVPN(draft)) { L.toast("Choose your VPN or add a trusted address first, in the box above the ports.", "error"); return; }
           setLevel(n, proto.value, who.value);
           L.closeModal();
           render();
@@ -513,6 +529,17 @@
     if (!/^\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?$/.test(v)) { L.toast("Enter an IPv4 subnet such as 100.64.0.0/10.", "error"); return; }
     draft.vpn.subnets = [...new Set([...draft.vpn.subnets, v])];
     $("s-vpn-subnet").value = "";
+    render();
+  });
+  $("s-trusted-add").addEventListener("click", () => {
+    const v = $("s-trusted-addr").value.trim();
+    // A rough shape check; the server validates for real.
+    if (!/^(\d{1,3}(\.\d{1,3}){3}|[0-9a-fA-F:]*:[0-9a-fA-F:.]*)(\/\d{1,3})?$/.test(v)) {
+      L.toast("Enter an IP address or range, such as 203.0.113.7 or 2001:db8::/48.", "error");
+      return;
+    }
+    draft.vpn.trusted = [...new Set([...draft.vpn.trusted, v])];
+    $("s-trusted-addr").value = "";
     render();
   });
   $("s-discard").addEventListener("click", () => { draft = clone(base); render(); });

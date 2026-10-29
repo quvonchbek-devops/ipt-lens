@@ -18,10 +18,34 @@ const (
 	LevelClosed Level = "closed" // nobody
 )
 
-// VPN identifies trusted traffic: by incoming interface, source subnet, or both.
+// VPN identifies who "VPN only" lets in: traffic arriving on a VPN interface
+// (or, when none is chosen, from a VPN subnet), plus trusted addresses such as
+// an office IP, IPv4 or IPv6, which apply in every case.
 type VPN struct {
 	Ifaces  []string `json:"ifaces"`
 	Subnets []string `json:"subnets"`
+	Trusted []string `json:"trusted,omitempty"`
+}
+
+// Empty reports whether nobody would count as "VPN only".
+func (v VPN) Empty() bool { return len(v.Ifaces)+len(v.Subnets)+len(v.Trusted) == 0 }
+
+// Reaches reports whether "VPN only" lets anyone in over IPv4 (v6 false) or
+// IPv6: through an interface, an IPv4 subnet (used when no interface is set),
+// or a trusted address of that family.
+func (v VPN) Reaches(v6 bool) bool {
+	return len(v.Ifaces) > 0 || (!v6 && len(v.Subnets) > 0) || len(v.trustedFor(v6)) > 0
+}
+
+// trustedFor returns the trusted addresses of one family.
+func (v VPN) trustedFor(v6 bool) []string {
+	var out []string
+	for _, t := range v.Trusted {
+		if strings.Contains(t, ":") == v6 {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 type PortAccess struct {
@@ -47,6 +71,7 @@ const (
 	commentMeta  = "iptlens:v1"
 	commentDef   = "iptlens:default"
 	maxVPN       = 8
+	maxComment   = 255 // iptables' limit for a comment
 	maxPorts     = 256 // enough for any server; keeps the list and the review readable
 )
 
@@ -85,6 +110,17 @@ func (p AccessPolicy) Validate() error {
 	}
 	if len(p.VPN.Ifaces)+len(p.VPN.Subnets) > maxVPN {
 		return invalidf("at most %d VPN interfaces and subnets", maxVPN)
+	}
+	if len(p.VPN.Trusted) > maxVPN {
+		return invalidf("at most %d trusted addresses", maxVPN)
+	}
+	for _, t := range p.VPN.Trusted {
+		if err := checkTrusted(t); err != nil {
+			return err
+		}
+	}
+	if len(p.metaComment()) > maxComment {
+		return invalidf("too many VPN entries and trusted addresses to record; use fewer or wider ranges")
 	}
 	for _, i := range p.VPN.Ifaces {
 		if !ifaceRe.MatchString(i) {
@@ -125,8 +161,35 @@ func (p AccessPolicy) Validate() error {
 		seen[key] = true
 		needsVPN = needsVPN || pa.Level == LevelVPN
 	}
-	if needsVPN && len(p.VPN.Ifaces)+len(p.VPN.Subnets) == 0 {
-		return invalidf("choose a VPN interface or subnet before using \"VPN only\"")
+	if needsVPN && p.VPN.Empty() {
+		return invalidf("choose a VPN or add a trusted address before using \"VPN only\"")
+	}
+	return nil
+}
+
+// checkTrusted accepts an IPv4 or IPv6 address or range that is narrower
+// than IPv4 /8 or IPv6 /16 (anything wider is as good as "Everyone"). The
+// family is decided by ':' as in trustedFor; IPv4 must be written as IPv4,
+// and a range must be written as its network address, so what the review
+// shows is exactly what opens.
+func checkTrusted(t string) error {
+	v6 := strings.Contains(t, ":")
+	s := t
+	if !strings.Contains(s, "/") {
+		s += map[bool]string{true: "/128", false: "/32"}[v6]
+	}
+	ip, n, err := net.ParseCIDR(s)
+	if err != nil {
+		return invalidf("invalid trusted address: %q", t)
+	}
+	if v6 && ip.To4() != nil {
+		return invalidf("write the IPv4 address %s without the ::ffff: prefix", ip)
+	}
+	if !ip.Equal(n.IP) {
+		return invalidf("%q has host bits set; the range it opens is %s", t, n)
+	}
+	if ones, _ := n.Mask.Size(); (!v6 && ones < 8) || (v6 && ones < 16) {
+		return invalidf("trusted range %q is too wide; it would let in a large part of the internet", t)
 	}
 	return nil
 }
@@ -142,8 +205,12 @@ func cat(parts ...[]string) []string {
 }
 
 func (p AccessPolicy) metaComment() string {
-	return fmt.Sprintf("%s default=%s vpn=%s;%s", commentMeta, p.Default,
+	s := fmt.Sprintf("%s default=%s vpn=%s;%s", commentMeta, p.Default,
 		strings.Join(p.VPN.Ifaces, ","), strings.Join(p.VPN.Subnets, ","))
+	if len(p.VPN.Trusted) > 0 { // a third part only when used, so older chains read the same
+		s += ";" + strings.Join(p.VPN.Trusted, ",")
+	}
+	return s
 }
 
 // levelRules returns the rules for one level: match narrows the packet, note is
@@ -165,6 +232,10 @@ func (p AccessPolicy) levelRules(level Level, match []string, note string, v6 bo
 		for _, s := range p.VPN.Subnets {
 			out = append(out, cat([]string{"-s", s}, match, comment(note), []string{"-j", "RETURN"}))
 		}
+	}
+	// Trusted addresses are deliberate exceptions, such as an office IP.
+	for _, s := range p.VPN.trustedFor(v6) {
+		out = append(out, cat([]string{"-s", s}, match, comment(note), []string{"-j", "RETURN"}))
 	}
 	return append(out, cat(match, comment(note), []string{"-j", "DROP"}))
 }
@@ -258,9 +329,11 @@ func ReadAccess(st *SystemState) (AccessPolicy, bool) {
 		case "default":
 			p.Default = Level(v)
 		case "vpn":
-			ifs, nets, _ := strings.Cut(v, ";")
+			ifs, rest, _ := strings.Cut(v, ";")
+			nets, trusted, _ := strings.Cut(rest, ";")
 			p.VPN.Ifaces = splitList(ifs)
 			p.VPN.Subnets = splitList(nets)
+			p.VPN.Trusted = splitList(trusted)
 		}
 	}
 	seen := map[string]bool{}

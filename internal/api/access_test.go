@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -230,5 +231,42 @@ func TestAccessPreviewListsIPv6Commands(t *testing.T) {
 	all := strings.Join(p.Commands, "\n")
 	if !strings.Contains(all, "ip6tables -A IPTLENS-IN -p ipv6-icmp -j RETURN") {
 		t.Fatalf("no ip6tables commands in preview:\n%s", all)
+	}
+}
+
+func TestAccessPreviewTrusted(t *testing.T) {
+	code, p := preview(t, `{"vpn":{"ifaces":[],"subnets":[],"trusted":["203.0.113.7"]},"default":"public",
+		"ports":[{"port":5432,"proto":"tcp","level":"vpn"}]}`)
+	if code != http.StatusOK {
+		t.Fatalf("code = %d", code)
+	}
+	if !slices.ContainsFunc(p.Changes, func(c string) bool {
+		return strings.Contains(c, "Trusted addresses") && strings.Contains(c, "203.0.113.7")
+	}) {
+		t.Fatalf("changes = %q", p.Changes)
+	}
+	if !strings.Contains(strings.Join(p.Commands, "\n"), "-s 203.0.113.7 -p tcp --dport 5432") {
+		t.Fatalf("commands lack the trusted rule:\n%s", strings.Join(p.Commands, "\n"))
+	}
+	if code, _ := preview(t, `{"vpn":{"ifaces":[],"subnets":[],"trusted":["0.0.0.0/0"]},"default":"public","ports":[]}`); code != http.StatusBadRequest {
+		t.Fatalf("0.0.0.0/0 as trusted: code = %d", code)
+	}
+}
+
+func TestAccessPreviewWarnsWhenIPv4HasNoVPN(t *testing.T) {
+	code, p := preview(t, `{"vpn":{"ifaces":[],"subnets":[],"trusted":["2001:db8::5"]},"default":"public",
+		"ports":[{"port":5432,"proto":"tcp","level":"vpn"}]}`)
+	if code != http.StatusOK {
+		t.Fatalf("code = %d", code)
+	}
+	if !slices.ContainsFunc(p.Warnings, func(w string) bool { return strings.Contains(w, "Over IPv4") }) {
+		t.Fatalf("no IPv4 warning: %q", p.Warnings)
+	}
+}
+
+func TestPinLensPortNeedsIPv4Access(t *testing.T) {
+	p := iptables.AccessPolicy{VPN: iptables.VPN{Trusted: []string{"2001:db8::5"}}, Default: iptables.LevelClosed}
+	if _, err := pinLensPort(p, 8090); err == nil {
+		t.Fatal("panel port pinned to VPN only although nothing reaches it over IPv4")
 	}
 }

@@ -496,6 +496,10 @@ tbody td:nth-child(2) { white-space: nowrap; }
 .s-h-what b { font-weight: 600; color: var(--t1); }
 .s-h-detail { color: var(--t3); font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
 @media (max-width: 640px) { .s-h-item { grid-template-columns: 1fr; } }
+.s-trusted { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.s-trusted > label { font-size: 13px; font-weight: 600; color: var(--t1); display: flex; flex-direction: column; gap: 2px; }
+.s-trusted > label .hint { font-weight: 400; }
+.s-trusted .s-chips:empty { display: none; }
 .s-add-port { align-self: flex-start; margin-top: 4px; }
 
 .s-chips { display: flex; flex-wrap: wrap; gap: 8px; }

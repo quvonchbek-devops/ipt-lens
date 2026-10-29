@@ -166,6 +166,15 @@ used only when no interface is chosen, since a source address can be spoofed.
 step with IPv4: if either fails, both roll back. ICMPv6 (needed for neighbour
 discovery) and the DHCPv6 client from link-local addresses are always allowed.
 VPN subnets are IPv4, so over IPv6 the VPN is recognised by its interface only.
+
+**Trusted addresses** (for example an office IP, IPv4 or IPv6) are let in
+wherever "VPN only" is set, with or without a VPN, so a team without a VPN can
+still keep a database reachable from the office only. They are matched by
+source address: reliable for TCP, while a UDP port can be reached with a
+forged source. Ranges wider than IPv4 /8 or IPv6 /16 are refused, and so is
+a range with host bits set (`10.1.2.3/8`), so the review shows exactly what
+opens. A trusted address helps only its own family: the review warns when
+"VPN only" would let nobody in over IPv4 or IPv6.
 Without `ip6tables`, the UI says plainly that IPv6 is not filtered.
 
 ## How a change works

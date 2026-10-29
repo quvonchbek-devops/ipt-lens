@@ -85,7 +85,7 @@ func ipv6Notes(available, covered, configured bool) string {
 		return "IPv6 does not carry the current policy (it was applied before IPv6 support, changed by hand, or ip6tables " +
 			"could not be read). Review and apply again so IPv6 is covered."
 	}
-	return "The policy applies to IPv6 too. VPN subnets are IPv4 only; over IPv6 the VPN is recognised by its interface."
+	return "The policy applies to IPv6 too. VPN subnets are IPv4 only; over IPv6 the VPN is recognised by its interface, plus IPv6 trusted addresses."
 }
 
 func (s *Server) ipv6Coverage(st *iptables.SystemState) (available, covered bool) {
@@ -193,9 +193,9 @@ func pinLensPort(p iptables.AccessPolicy, port int) (iptables.AccessPolicy, erro
 	if level != iptables.LevelClosed {
 		return out, nil
 	}
-	if len(p.VPN.Ifaces)+len(p.VPN.Subnets) == 0 {
-		return out, fmt.Errorf("%w: IPT-Lens itself listens on port %d and would become unreachable. "+
-			"Choose your VPN first, so the panel stays reachable over it", iptables.ErrInvalid, port)
+	if !p.VPN.Reaches(false) {
+		return out, fmt.Errorf("%w: IPT-Lens itself listens on port %d and would become unreachable over IPv4. "+
+			"Choose your VPN or add an IPv4 trusted address first, so the panel stays reachable", iptables.ErrInvalid, port)
 	}
 	if idx >= 0 {
 		out.Ports[idx].Level = iptables.LevelVPN
@@ -271,6 +271,12 @@ func previewOf(cur, next iptables.AccessPolicy, rows []accessRow, ipv6 bool) acc
 	if vpnText(cur.VPN) != vpnText(next.VPN) {
 		pv.Changes = append(pv.Changes, "VPN: "+vpnText(next.VPN))
 	}
+	if a, b := strings.Join(cur.VPN.Trusted, ", "), strings.Join(next.VPN.Trusted, ", "); a != b {
+		if b == "" {
+			b = "none"
+		}
+		pv.Changes = append(pv.Changes, "Trusted addresses (let in wherever \"VPN only\" is set): "+b)
+	}
 	curDef, _ := levelOf(cur, 0, "")
 	nextDef, _ := levelOf(next, 0, "")
 	if curDef != nextDef {
@@ -331,9 +337,21 @@ func previewOf(cur, next iptables.AccessPolicy, rows []accessRow, ipv6 bool) acc
 	pv.Notes = append(pv.Notes, "Traffic from containers, pods and VMs on this host is always allowed, "+
 		"through these interfaces: "+strings.Join(iptables.InternalIfaces(), ", ")+
 		". If a bridge named br-* connects to an outside network, filter it in the Advanced view.")
-	if ipv6 && len(next.VPN.Ifaces) == 0 && usesVPN(next) {
-		pv.Warnings = append(pv.Warnings, "Over IPv6, \"VPN only\" needs a VPN interface. With only a subnet, "+
-			"those ports are closed to everyone over IPv6.")
+	udpVPN := next.Default == iptables.LevelVPN
+	for _, pa := range next.Ports {
+		udpVPN = udpVPN || (pa.Proto == "udp" && pa.Level == iptables.LevelVPN)
+	}
+	if len(next.VPN.Trusted) > 0 && udpVPN {
+		pv.Notes = append(pv.Notes, "Trusted addresses are matched by source address. That is reliable for TCP; "+
+			"a UDP port can be reached with a forged source address.")
+	}
+	if usesVPN(next) && !next.VPN.Reaches(false) {
+		pv.Warnings = append(pv.Warnings, "Over IPv4, \"VPN only\" lets in nobody: there is no VPN, IPv4 subnet or "+
+			"IPv4 trusted address. Those ports are closed to everyone over IPv4.")
+	}
+	if ipv6 && usesVPN(next) && !next.VPN.Reaches(true) {
+		pv.Warnings = append(pv.Warnings, "Over IPv6, \"VPN only\" lets in a VPN interface or IPv6 trusted addresses, "+
+			"and neither is set: those ports are closed to everyone over IPv6.")
 	}
 	pv.Notes = append(pv.Notes, ipv6Notes(ipv6, true, true)) // describes the state after applying
 	families := []bool{false}

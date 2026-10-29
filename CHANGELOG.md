@@ -10,6 +10,9 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 - Each port in the simple view shows the program listening on it (`sshd`,
   `nginx`, ...), read from `/proc/<pid>/fd` and `/proc/<pid>/comm`.
+- **Trusted addresses** in the simple view: IPv4 or IPv6 addresses or ranges,
+  such as an office IP, let in wherever "VPN only" is set, with or without a
+  VPN. Ranges wider than /8 (IPv4) or /16 (IPv6) are refused.
 - **Undo now** next to **Keep this change** (the confirm button, renamed):
   undoes a pending change at once instead of waiting for the timer.
   `POST /api/v1/rollback`.

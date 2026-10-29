@@ -46,7 +46,7 @@
 
     <section id="s-vpn-card" class="s-card" aria-labelledby="s-vpn-title">
       <div class="s-card-h s-vpn-h">
-        <h2 id="s-vpn-title">Your VPN</h2>
+        <h2 id="s-vpn-title">Your VPN and trusted addresses</h2>
         <p id="s-vpn-status" class="hint"></p>
         <button id="s-vpn-change" class="btn btn-ghost btn-sm" type="button" hidden>Change</button>
       </div>
@@ -55,6 +55,14 @@
         <div class="s-inline">
           <input id="s-vpn-subnet" class="mono" placeholder="Or a VPN subnet, e.g. 100.64.0.0/10" aria-label="VPN subnet">
           <button id="s-vpn-add" class="btn btn-ghost btn-sm" type="button">Add subnet</button>
+        </div>
+        <div class="s-trusted">
+          <label for="s-trusted-addr">Trusted addresses <span class="hint">Let in where “VPN only” is set, even without the VPN. For example your office IP.</span></label>
+          <div id="s-trusted-list" class="s-chips"></div>
+          <div class="s-inline">
+            <input id="s-trusted-addr" class="mono" placeholder="203.0.113.7 or 2001:db8::/48">
+            <button id="s-trusted-add" class="btn btn-ghost btn-sm" type="button">Add address</button>
+          </div>
         </div>
       </div>
     </section>
