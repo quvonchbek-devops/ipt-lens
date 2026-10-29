@@ -6,7 +6,7 @@
 A small web panel for reading and safely changing **iptables** on a Linux server.
 One static Go binary, no dependencies, no database.
 
-![IPT-Lens showing the filter table in demo mode](docs/images/screenshot.png)
+![IPT-Lens simple view: each port with Everyone, VPN only or Nobody](docs/images/simple.png)
 
 ## Why
 
@@ -17,7 +17,13 @@ confirm it**. If you lose access and cannot confirm, the change rolls itself bac
 
 ## Features
 
-- **Readable ruleset.** All four tables, chains in kernel order, packet and byte
+- **Simple view: who can reach which port.** One list of the ports this server
+  listens on and the ports Docker publishes. For each, pick **Everyone**,
+  **VPN only** or **Nobody**, plus one setting for every other port. Quick tasks
+  cover the common jobs: *lock the server behind the VPN*, *open a port*,
+  *close a container port*. Every change is shown in plain sentences before it
+  is applied. You never write an iptables rule.
+- **Readable ruleset (Advanced view).** ([screenshot](docs/images/advanced.png)) All four tables, chains in kernel order, packet and byte
   counters, interface and Docker container names next to addresses.
 - **Packet simulator.** Enter source, destination, interfaces, protocol and port;
   see every chain and rule the packet passes through, including DNAT rewrites and
@@ -112,6 +118,21 @@ the flag, the UI tells you that a confirmed change lasts only until reboot.
 | Environment | Meaning |
 |---|---|
 | `IPTLENS_TOKEN` | Bearer token for the API. Required on non-loopback addresses; otherwise generated in `<state-dir>/token` if unset |
+
+## How the simple view works
+
+IPT-Lens keeps its own chains: `IPTLENS-IN-*`, jumped from the top of `INPUT`,
+and `IPTLENS-DK-*`, jumped from the top of `DOCKER-USER` for published container
+ports (Docker sends those past `INPUT`). Packets it allows go back to your own
+rules with `RETURN`, so rules you wrote by hand still apply. Loopback,
+established connections, ICMP, the DHCP client and traffic from Docker bridges
+are always allowed. IPT-Lens' own port never drops below "VPN only", and a
+warning appears before SSH or your VPN's own port (WireGuard, Tailscale,
+OpenVPN) leaves "Everyone".
+
+The VPN is identified by its interface (`wg0`, `tailscale0`, ...). A subnet is
+used only when no interface is chosen, since a source address can be spoofed.
+IPv6 is not filtered.
 
 ## How a change works
 

@@ -126,3 +126,36 @@ func TestPinLensPort(t *testing.T) {
 		}
 	}
 }
+
+func TestAccessPreviewWarnsAboutSubnetOnlyVPN(t *testing.T) {
+	_, p := preview(t, `{"vpn":{"ifaces":[],"subnets":["100.64.0.0/10"]},"default":"vpn","ports":[]}`)
+	if !strings.Contains(strings.Join(p.Warnings, "\n"), "source address") {
+		t.Fatalf("warnings = %q", p.Warnings)
+	}
+}
+
+func TestAccessViewNotesMissingDockerChain(t *testing.T) {
+	// Demo data has DOCKER-USER, so a note must not appear there.
+	rec := do(t, newTestServer(t, ""), http.MethodGet, "/api/v1/access", "")
+	if strings.Contains(rec.Body.String(), "DOCKER-USER") {
+		t.Fatalf("unexpected Docker note: %s", rec.Body)
+	}
+	notes := dockerNotes(false, false, 2)
+	if len(notes) != 1 || !strings.Contains(notes[0], "DOCKER-USER") {
+		t.Fatalf("notes = %q", notes)
+	}
+	if notes := dockerNotes(true, false, 2); len(notes) != 1 || !strings.Contains(notes[0], "apply again") {
+		t.Fatalf("configured without container chain: %q", notes)
+	}
+	if notes := dockerNotes(true, true, 2); len(notes) != 0 {
+		t.Fatalf("covered setup produced notes: %q", notes)
+	}
+}
+
+func TestAccessPreviewWarnsWhenVPNPortCloses(t *testing.T) {
+	// The demo host listens on 51820/udp (WireGuard); "everything else: VPN only" would cut the VPN off.
+	_, p := preview(t, `{"vpn":{"ifaces":["wg0"],"subnets":[]},"default":"vpn","ports":[]}`)
+	if !strings.Contains(strings.Join(p.Warnings, "\n"), "WireGuard") {
+		t.Fatalf("warnings = %q", p.Warnings)
+	}
+}

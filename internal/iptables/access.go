@@ -123,8 +123,12 @@ func (p AccessPolicy) levelRules(level Level, match []string, note string) [][]s
 	for _, i := range p.VPN.Ifaces {
 		out = append(out, cat([]string{"-i", i}, match, comment(note), []string{"-j", "RETURN"}))
 	}
-	for _, s := range p.VPN.Subnets {
-		out = append(out, cat([]string{"-s", s}, match, comment(note), []string{"-j", "RETURN"}))
+	// A source address can be spoofed from the internet; the incoming interface
+	// cannot. Subnets identify the VPN only when no interface is chosen.
+	if len(p.VPN.Ifaces) == 0 {
+		for _, s := range p.VPN.Subnets {
+			out = append(out, cat([]string{"-s", s}, match, comment(note), []string{"-j", "RETURN"}))
+		}
 	}
 	return append(out, cat(match, comment(note), []string{"-j", "DROP"}))
 }
@@ -338,6 +342,18 @@ func (w *Watchdog) ApplyAccess(p AccessPolicy) error {
 		pl.steps = append(pl.steps, jumps...)
 		return pl, nil
 	})
+}
+
+// DockerCoverage reports whether DOCKER-USER exists and whether it jumps to a
+// managed chain, i.e. whether published container ports are filtered.
+func DockerCoverage(st *SystemState) (hasChain, covered bool) {
+	tbl := st.Tables["filter"]
+	if tbl == nil {
+		return false, false
+	}
+	_, hasChain = tbl.Chains["DOCKER-USER"]
+	name, _ := activeChain(tbl, "DOCKER-USER", accessDocker)
+	return hasChain, name != ""
 }
 
 // InputRules and DockerRules expose the generated chains for previews.

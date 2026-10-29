@@ -596,6 +596,9 @@
     refresh();
   });
 
+  // Shared with simple.js
+  window.IPTLens = { api, toast, openModal, closeModal, dismissModal, el, esc, refresh: () => { lastSig = ""; return refresh(); } };
+
   /* ---------- timers ---------- */
   setInterval(() => {
     if (bannerOn && remaining > 0) {

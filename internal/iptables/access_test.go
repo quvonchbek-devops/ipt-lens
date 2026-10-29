@@ -39,11 +39,9 @@ func TestAccessInputRules(t *testing.T) {
 		"-i br-+ -j RETURN",
 		"-p tcp --dport 22 -m comment --comment iptlens:port=22/tcp level=public -j RETURN",
 		"-i wg0 -p tcp --dport 5432 -m comment --comment iptlens:port=5432/tcp level=vpn -j RETURN",
-		"-s 100.64.0.0/10 -p tcp --dport 5432 -m comment --comment iptlens:port=5432/tcp level=vpn -j RETURN",
 		"-p tcp --dport 5432 -m comment --comment iptlens:port=5432/tcp level=vpn -j DROP",
 		"-p tcp --dport 3306 -m comment --comment iptlens:port=3306/tcp level=closed -j DROP",
 		"-i wg0 -m comment --comment iptlens:default -j RETURN",
-		"-s 100.64.0.0/10 -m comment --comment iptlens:default -j RETURN",
 		"-m comment --comment iptlens:default -j DROP",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -59,11 +57,9 @@ func TestAccessDockerRules(t *testing.T) {
 		"-i br-+ -j RETURN",
 		"-p tcp -m conntrack --ctorigdstport 22 -m comment --comment iptlens:port=22/tcp level=public -j RETURN",
 		"-i wg0 -p tcp -m conntrack --ctorigdstport 5432 -m comment --comment iptlens:port=5432/tcp level=vpn -j RETURN",
-		"-s 100.64.0.0/10 -p tcp -m conntrack --ctorigdstport 5432 -m comment --comment iptlens:port=5432/tcp level=vpn -j RETURN",
 		"-p tcp -m conntrack --ctorigdstport 5432 -m comment --comment iptlens:port=5432/tcp level=vpn -j DROP",
 		"-p tcp -m conntrack --ctorigdstport 3306 -m comment --comment iptlens:port=3306/tcp level=closed -j DROP",
 		"-i wg0 -m comment --comment iptlens:default -j RETURN",
-		"-s 100.64.0.0/10 -m comment --comment iptlens:default -j RETURN",
 		"-m comment --comment iptlens:default -j DROP",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -267,4 +263,13 @@ func mustContain(t *testing.T, calls []string, want string) {
 		}
 	}
 	t.Fatalf("missing call %q in:\n%s", want, strings.Join(calls, "\n"))
+}
+
+func TestAccessSubnetOnlyWithoutInterface(t *testing.T) {
+	p := samplePolicy()
+	p.VPN.Ifaces = nil
+	got := strings.Join(joinRules(inputRules(p)), "\n")
+	if !strings.Contains(got, "-s 100.64.0.0/10 -p tcp --dport 5432") {
+		t.Fatalf("subnet not used when it is the only VPN identity:\n%s", got)
+	}
 }

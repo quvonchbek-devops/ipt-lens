@@ -6,6 +6,16 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Simple view**, now the default: a list of ports (host listeners and Docker
+  published ports) with three choices each, *Everyone*, *VPN only* or
+  *Nobody*, plus a setting for every other port. Quick tasks: lock the server
+  behind the VPN, open a port, close a container port. Changes are reviewed in
+  plain sentences, with the iptables commands folded away, and go through the
+  usual confirm-or-rollback flow. The previous UI is the *Advanced* view.
+- `GET /api/v1/access`, `POST /api/v1/access/preview`, `POST /api/v1/access/apply`.
+
 ## [0.1.0] - 2026-10-28
 
 First public release.

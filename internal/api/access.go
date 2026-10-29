@@ -64,6 +64,9 @@ var levelLabel = map[iptables.Level]string{
 	iptables.LevelPublic: "Everyone", iptables.LevelVPN: "VPN only", iptables.LevelClosed: "Nobody",
 }
 
+// vpnServices are VPN endpoints: clients reach them before they are on the VPN.
+var vpnServices = map[string]bool{"WireGuard": true, "Tailscale": true, "OpenVPN": true}
+
 const ipv6Note = "IPv6 traffic is not filtered by IPT-Lens. If this server has a public IPv6 address, protect it separately."
 
 // levelOf returns the effective level of a port under p, and whether p sets it
@@ -82,16 +85,8 @@ func levelOf(p iptables.AccessPolicy, port int, proto string) (iptables.Level, b
 
 func portKey(port int, proto string) string { return fmt.Sprintf("%d/%s", port, proto) }
 
-func (s *Server) currentAccess() (iptables.AccessPolicy, bool, error) {
-	st, err := iptables.FetchState(s.Demo)
-	if err != nil {
-		return iptables.AccessPolicy{}, false, err
-	}
-	p, ok := iptables.ReadAccess(st)
-	return p, ok, nil
-}
-
-func (s *Server) buildView(cur iptables.AccessPolicy, configured bool, d discovery) accessView {
+func (s *Server) buildView(st *iptables.SystemState, d discovery) accessView {
+	cur, configured := iptables.ReadAccess(st)
 	rows := map[string]*accessRow{}
 	row := func(port int, proto string) *accessRow {
 		k := portKey(port, proto)
@@ -115,7 +110,9 @@ func (s *Server) buildView(cur iptables.AccessPolicy, configured bool, d discove
 	if s.LensPort > 0 {
 		row(s.LensPort, "tcp").Locked = true
 	}
-	v := accessView{Configured: configured, Policy: cur, VPNCandidates: d.vpn, Notes: []string{ipv6Note}}
+	hasChain, covered := iptables.DockerCoverage(st)
+	notes := append([]string{ipv6Note}, dockerNotes(hasChain, covered || !configured, len(d.published))...)
+	v := accessView{Configured: configured, Policy: cur, VPNCandidates: d.vpn, Notes: notes}
 	if v.VPNCandidates == nil {
 		v.VPNCandidates = []enricher.VPNIface{}
 	}
@@ -136,12 +133,12 @@ func (s *Server) buildView(cur iptables.AccessPolicy, configured bool, d discove
 }
 
 func (s *Server) handleAccess(w http.ResponseWriter, r *http.Request) {
-	cur, ok, err := s.currentAccess()
+	st, err := iptables.FetchState(s.Demo)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errBody(err.Error()))
 		return
 	}
-	writeJSON(w, http.StatusOK, s.buildView(cur, ok, s.discover()))
+	writeJSON(w, http.StatusOK, s.buildView(st, s.discover()))
 }
 
 // pinLensPort keeps IPT-Lens' own port reachable at least over the VPN, so a
@@ -176,13 +173,15 @@ func (s *Server) handleAccessPreview(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	cur, _, err := s.currentAccess()
+	st, err := iptables.FetchState(s.Demo)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errBody(err.Error()))
 		return
 	}
-	view := s.buildView(cur, true, s.discover())
-	writeJSON(w, http.StatusOK, previewOf(cur, next, view.Rows))
+	view := s.buildView(st, s.discover())
+	pv := previewOf(view.Policy, next, view.Rows)
+	pv.Warnings = append(pv.Warnings, view.Notes[1:]...) // Docker coverage notes; the IPv6 note is already there
+	writeJSON(w, http.StatusOK, pv)
 }
 
 func (s *Server) handleAccessApply(w http.ResponseWriter, r *http.Request) {
@@ -257,6 +256,11 @@ func previewOf(cur, next iptables.AccessPolicy, rows []accessRow) accessPreview 
 			continue
 		}
 		pv.Changes = append(pv.Changes, fmt.Sprintf("%s: %s → %s", rowLabel(k.port, k.proto, names[k]), levelLabel[from], levelLabel[to]))
+		if vpnServices[names[k]] && from == iptables.LevelPublic {
+			pv.Warnings = append(pv.Warnings, fmt.Sprintf(
+				"%s is your VPN's own port: devices connect to it from the internet. Setting it to %s disconnects the VPN. "+
+					"Keep it at Everyone.", rowLabel(k.port, k.proto, names[k]), strings.ToLower(levelLabel[to])))
+		}
 		if names[k] == "SSH" && from == iptables.LevelPublic {
 			pv.Warnings = append(pv.Warnings, fmt.Sprintf(
 				"SSH will be reachable by %s. If you are connected over SSH without the VPN, you will be cut off. "+
@@ -265,6 +269,10 @@ func previewOf(cur, next iptables.AccessPolicy, rows []accessRow) accessPreview 
 	}
 	if len(pv.Changes) == 0 {
 		pv.Changes = append(pv.Changes, "Nothing changes.")
+	}
+	if len(next.VPN.Ifaces) == 0 && len(next.VPN.Subnets) > 0 {
+		pv.Warnings = append(pv.Warnings, "With only a subnet, IPT-Lens trusts the packet's source address, "+
+			"which can be spoofed from the internet. Choose your VPN interface if you can.")
 	}
 	pv.Warnings = append(pv.Warnings, ipv6Note)
 	for _, rule := range iptables.InputRules(next) {
@@ -285,4 +293,18 @@ func shellJoin(args []string) string {
 		out[i] = a
 	}
 	return strings.Join(out, " ")
+}
+
+// dockerNotes explains when published container ports are not filtered.
+func dockerNotes(hasChain, covered bool, published int) []string {
+	switch {
+	case published == 0:
+		return nil
+	case !hasChain:
+		return []string{fmt.Sprintf("Docker publishes %d port(s), but its DOCKER-USER chain is missing, so container ports "+
+			"cannot be filtered. Restart Docker, then apply again.", published)}
+	case !covered:
+		return []string{"Docker started after your last apply, so container ports are not filtered yet. Review and apply again."}
+	}
+	return nil
 }

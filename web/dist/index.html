@@ -14,7 +14,11 @@
       <span id="ver" class="ver"></span>
       <span id="conn" class="pill pill-muted"><i class="dot"></i><span id="conn-text">Connecting</span></span>
     </div>
-    <nav class="seg" aria-label="Tables">
+    <nav class="seg mode-switch" aria-label="View">
+      <button class="seg-btn" data-mode="simple" title="Who can reach which port">Simple</button>
+      <button class="seg-btn" data-mode="advanced" title="Every iptables rule, chain by chain">Advanced</button>
+    </nav>
+    <nav id="table-nav" class="seg" aria-label="Tables">
       <button class="seg-btn active" data-table="filter" title="Allow and block rules">FILTER</button>
       <button class="seg-btn" data-table="nat" title="Address translation (NAT)">NAT</button>
       <button class="seg-btn" data-table="mangle" title="Packet marking">MANGLE</button>
@@ -29,7 +33,58 @@
     <button id="btn-confirm" class="btn btn-warn btn-sm">Confirm change</button>
   </div>
 
-  <main class="layout">
+  <main id="simple" class="simple" hidden>
+    <header class="s-head">
+      <h1>Who can reach this server</h1>
+      <p>Pick, for every port, who may connect. Nothing changes until you review and apply.</p>
+    </header>
+
+    <section class="s-card" aria-labelledby="s-vpn-title">
+      <div class="s-card-h">
+        <h2 id="s-vpn-title">Your VPN</h2>
+        <p id="s-vpn-status" class="hint"></p>
+      </div>
+      <div id="s-vpn-list" class="s-chips"></div>
+      <div class="s-inline">
+        <input id="s-vpn-subnet" class="mono" placeholder="Add a VPN subnet, e.g. 100.64.0.0/10" aria-label="VPN subnet">
+        <button id="s-vpn-add" class="btn btn-ghost btn-sm" type="button">Add subnet</button>
+      </div>
+    </section>
+
+    <section class="s-tasks" aria-label="Quick tasks">
+      <button class="s-task" data-task="lock" type="button">
+        <b>Lock the server behind the VPN</b>
+        <span>Keep a few ports public, everything else VPN only</span>
+      </button>
+      <button class="s-task" data-task="open" type="button">
+        <b>Open a port</b>
+        <span>Let a new service through</span>
+      </button>
+      <button class="s-task" data-task="container" type="button">
+        <b>Close a container port</b>
+        <span>Docker ports skip the normal firewall</span>
+      </button>
+    </section>
+
+    <section class="s-card s-ports" aria-labelledby="s-ports-title">
+      <div class="s-card-h">
+        <h2 id="s-ports-title">Ports</h2>
+        <p class="hint">Ports this server listens on, ports Docker publishes, and ports you set.</p>
+      </div>
+      <div id="s-rows" class="s-rows"></div>
+      <div id="s-default" class="s-row s-default"></div>
+    </section>
+
+    <p id="s-notes" class="hint s-notes"></p>
+  </main>
+
+  <div id="s-bar" class="s-bar" hidden>
+    <span id="s-bar-text"></span>
+    <button id="s-discard" class="btn btn-ghost btn-sm" type="button">Discard</button>
+    <button id="s-review" class="btn btn-primary btn-sm" type="button">Review and apply</button>
+  </div>
+
+  <main id="advanced" class="layout" hidden>
     <aside class="sidebar">
       <details class="help" open>
         <summary>How this works</summary>
@@ -124,5 +179,6 @@
   </div>
 
   <script src="app.js"></script>
+  <script src="simple.js"></script>
 </body>
 </html>
