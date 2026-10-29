@@ -6,6 +6,10 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-29
+
+First public release.
+
 ### Added
 
 - **Simple view**, now the default: a list of ports (host listeners and Docker
@@ -15,13 +19,6 @@ and the project uses [Semantic Versioning](https://semver.org/).
   plain sentences, with the iptables commands folded away, and go through the
   usual confirm-or-rollback flow. The previous UI is the *Advanced* view.
 - `GET /api/v1/access`, `POST /api/v1/access/preview`, `POST /api/v1/access/apply`.
-
-## [0.1.0] - 2026-10-28
-
-First public release.
-
-### Added
-
 - `--persist-file`: on confirm, save the full ruleset (for example to
   `/etc/iptables/rules.v4`) so confirmed changes survive a reboot.
 - `--keep-backups` (default 20): old `iptables-save` snapshots are pruned.

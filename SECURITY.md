@@ -22,6 +22,12 @@ You can expect an acknowledgement within 7 days. Once a fix is ready, a release
 is published and the advisory is disclosed with credit, unless you prefer
 otherwise.
 
+## Verifying releases
+
+Every release archive has a SHA-256 checksum and a signed build provenance
+attestation. Verify with `gh attestation verify <archive> -R
+quvonchbek-devops/ipt-lens` before installing.
+
 ## Security model
 
 What IPT-Lens is designed to resist:

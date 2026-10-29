@@ -54,7 +54,18 @@ Requires Go 1.21 or newer.
 ## Install on a server
 
 Download a release archive from the
-[releases page](https://github.com/quvonchbek-devops/ipt-lens/releases), or build it:
+[releases page](https://github.com/quvonchbek-devops/ipt-lens/releases) and
+verify it before running it as root:
+
+```sh
+sha256sum --ignore-missing -c checksums.txt
+gh attestation verify ipt-lens_*_linux_amd64.tar.gz -R quvonchbek-devops/ipt-lens
+```
+
+The second command checks GitHub's signed build provenance: the archive was
+built by this repository's release workflow from the tagged commit.
+
+Or build it yourself:
 
 ```sh
 make build
