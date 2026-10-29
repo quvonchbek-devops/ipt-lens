@@ -694,3 +694,13 @@ func TestApplyAccessCoversIPv6BeforeAnyIPv6Table(t *testing.T) {
 		t.Fatal("IPv6 reported as unavailable on a host that has it")
 	}
 }
+
+func TestApplyAccessOnHostWithoutFilterTable(t *testing.T) {
+	f := installFake(t)
+	f.save = "" // a fresh nf_tables host: no table until the first rule
+	w := newTestWatchdog(t, time.Hour)
+	if err := w.ApplyAccess(samplePolicy()); err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, f.Calls(), "-t filter -I INPUT 1 -m comment --comment iptlens:jump -j IPTLENS-IN-A")
+}

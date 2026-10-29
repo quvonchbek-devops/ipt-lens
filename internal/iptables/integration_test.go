@@ -383,18 +383,23 @@ func TestIntegrationLimit(t *testing.T) {
 	}
 }
 
-// A fresh nf_tables host has no IPv6 filter table until the first rule; the
-// policy must still cover IPv6 (an earlier version skipped it).
-func TestIntegrationIPv6BeforeAnyIPv6Table(t *testing.T) {
+// A fresh nf_tables host has no filter tables until the first rule, as on a
+// new VPS. The policy must still apply to both families (earlier versions
+// failed on IPv4 and skipped IPv6).
+func TestIntegrationFreshHostWithoutTables(t *testing.T) {
 	integration(t)
 	if _, err := exec.LookPath("nft"); err != nil {
-		t.Skip("needs nft to remove the IPv6 filter table")
+		t.Skip("needs nft to remove the filter tables")
 	}
-	if out, err := exec.Command("nft", "delete", "table", "ip6", "filter").CombinedOutput(); err != nil {
-		t.Skipf("cannot remove the IPv6 filter table (legacy backend?): %v: %s", err, out)
+	for _, fam := range []string{"ip", "ip6"} {
+		if out, err := exec.Command("nft", "delete", "table", fam, "filter").CombinedOutput(); err != nil {
+			t.Skipf("cannot remove the %s filter table (legacy backend?): %v: %s", fam, err, out)
+		}
 	}
-	if out, _ := runSaveRules6(); strings.Contains(string(out), "*filter") {
-		t.Fatalf("the IPv6 filter table is still there:\n%s", out)
+	for _, save := range []func() ([]byte, error){runSaveRules, runSaveRules6} {
+		if out, _ := save(); strings.Contains(string(out), "*filter") {
+			t.Fatalf("a filter table is still there:\n%s", out)
+		}
 	}
 	w, err := NewWatchdog(privateDir(t), false, time.Hour)
 	if err != nil {
@@ -403,8 +408,10 @@ func TestIntegrationIPv6BeforeAnyIPv6Table(t *testing.T) {
 	if err := w.ApplyAccess(samplePolicy()); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := ReadAccess(liveState(t, true)); !ok {
-		t.Fatal("IPv6 left without the policy on a host that had no IPv6 table yet")
+	for _, v6 := range []bool{false, true} {
+		if _, ok := ReadAccess(liveState(t, v6)); !ok {
+			t.Fatalf("v6=%v: left without the policy on a host that had no filter table yet", v6)
+		}
 	}
 	if err := w.Rollback(); err != nil {
 		t.Fatal(err)

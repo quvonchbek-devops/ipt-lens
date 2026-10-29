@@ -487,9 +487,11 @@ func (w *Watchdog) ApplyAccess(p AccessPolicy) error {
 		if err != nil {
 			return plan{}, err
 		}
+		// With nf_tables a fresh host has no filter table until the first
+		// rule; it is empty, and the first command creates it.
 		tbl := st.Tables["filter"]
 		if tbl == nil {
-			return plan{}, fmt.Errorf("filter table not found")
+			tbl = &Table{Name: "filter", Chains: map[string]*Chain{}}
 		}
 		pl := plan{desc: "access policy"}
 		var jumps []step

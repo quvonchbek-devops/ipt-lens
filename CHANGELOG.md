@@ -18,6 +18,9 @@ real iptables and ip6tables in CI.
   the first rule, and IPT-Lens took that for "no IPv6": the simple view left
   IPv6 open and said ip6tables was missing. IPv6 is now detected from the
   kernel (`/proc/net/if_inet6`) and the table is created when needed.
+- The same host also has no IPv4 filter table yet, so applying the simple
+  view on a brand-new server failed with "filter table not found". A missing
+  table is now treated as empty.
 
 ### Added
 
