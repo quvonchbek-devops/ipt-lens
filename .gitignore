@@ -2,3 +2,4 @@
 /dist/
 *.zip
 coverage.out
+.superpowers/

@@ -37,13 +37,15 @@ type change struct {
 	Undo    [][]string `json:"undo"` // in execution order (reverse of the applied steps)
 	BootID  string     `json:"boot_id,omitempty"`
 	Expires time.Time  `json:"expires"`
+	cleanup [][]string // best-effort commands run after confirmation
 	timer   *time.Timer
 }
 
 // plan is one change: each step's undo reverses exactly that step.
 type plan struct {
-	desc  string
-	steps []step
+	desc    string
+	steps   []step
+	cleanup [][]string // run after confirmation, e.g. removing a replaced chain
 }
 
 type step struct{ do, undo []string }
@@ -145,6 +147,10 @@ func safeUndo(cmd []string) bool {
 	}
 	switch cmd[2] {
 	case "-D", "-I", "-R":
+	case "-F", "-X": // only IPT-Lens' own chains may be flushed or deleted
+		if len(cmd) != 4 || !strings.HasPrefix(cmd[3], accessPrefix) {
+			return false
+		}
 	default:
 		return false
 	}
@@ -175,7 +181,9 @@ func runUndo(cmds [][]string) error {
 func reverseUndo(steps []step) [][]string {
 	undo := make([][]string, 0, len(steps))
 	for i := len(steps) - 1; i >= 0; i-- {
-		undo = append(undo, steps[i].undo)
+		if len(steps[i].undo) > 0 { // some steps are undone together by another step's undo
+			undo = append(undo, steps[i].undo)
+		}
 	}
 	return undo
 }
@@ -205,7 +213,8 @@ func (w *Watchdog) begin(build func() (plan, error)) error {
 		return err
 	}
 
-	c := &change{Desc: p.desc, Undo: reverseUndo(p.steps), Expires: time.Now().Add(w.timeout), BootID: bootID()}
+	c := &change{Desc: p.desc, Undo: reverseUndo(p.steps), Expires: time.Now().Add(w.timeout), BootID: bootID(),
+		cleanup: p.cleanup}
 	if err := w.writePending(c); err != nil {
 		return fmt.Errorf("cannot record pending change, nothing was applied: %w", err)
 	}
@@ -320,8 +329,14 @@ func (w *Watchdog) Confirm() (persisted bool, err error) {
 		return false, ErrNoPending
 	}
 	w.pending.timer.Stop()
+	cleanup := w.pending.cleanup
 	w.pending = nil
 	_ = os.Remove(w.pendingPath())
+	for _, cmd := range cleanup {
+		if out, err := ipt(cmd...); err != nil {
+			log.Printf("cleanup %q: %v: %s", cmd, err, strings.TrimSpace(string(out)))
+		}
+	}
 	if w.persistFile == "" {
 		return false, nil
 	}

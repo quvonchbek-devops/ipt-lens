@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -90,6 +91,7 @@ func main() {
 		Watch:        watch,
 		Static:       http.FileServer(http.FS(static)),
 		TokenHint:    tokenHint,
+		LensPort:     lensPort(*listen),
 	}
 
 	httpSrv := &http.Server{
@@ -134,6 +136,20 @@ func hostAllowlist(listen, extra string) []string {
 		hosts = append(hosts, host)
 	}
 	return append(hosts, extras...)
+}
+
+// lensPort returns the port IPT-Lens is reachable on from other hosts, or 0
+// when it listens on loopback only (reached over an SSH tunnel).
+func lensPort(listen string) int {
+	if isLoopback(listen) {
+		return 0
+	}
+	_, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(port)
+	return n
 }
 
 // displayVersion prefixes release numbers with "v" (0.1.0 -> v0.1.0) and leaves

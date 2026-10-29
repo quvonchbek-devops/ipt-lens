@@ -86,3 +86,11 @@ func TestLoadOrCreateTokenReportsReadErrors(t *testing.T) {
 		t.Fatalf("misleading or missing error: %v", err)
 	}
 }
+
+func TestLensPort(t *testing.T) {
+	for listen, want := range map[string]int{"127.0.0.1:8090": 0, "10.8.0.1:8090": 8090, ":9000": 9000, "bad": 0} {
+		if got := lensPort(listen); got != want {
+			t.Errorf("lensPort(%q) = %d, want %d", listen, got, want)
+		}
+	}
+}

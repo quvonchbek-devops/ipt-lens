@@ -131,9 +131,11 @@ func ParseIptablesSave(r io.Reader) (*SystemState, error) {
 func markProtected(st *SystemState) {
 	for _, t := range st.Tables {
 		for name, c := range t.Chains {
-			c.Protected = protectedName(name)
+			// IPT-Lens' own chains are edited through the simple view only.
+			lens := strings.HasPrefix(name, accessPrefix)
+			c.Protected = protectedName(name) || lens
 			for _, r := range c.Rules {
-				r.Protected = isProtected(name, r)
+				r.Protected = isProtected(name, r) || lens || strings.HasPrefix(r.Target, accessPrefix)
 			}
 		}
 	}

@@ -26,6 +26,7 @@ type Server struct {
 	Watch        *iptables.Watchdog
 	Static       http.Handler
 	TokenHint    string // where to find the token, sent with 401 responses
+	LensPort     int    // IPT-Lens' own port when reachable from outside; kept at least "VPN only"
 }
 
 func (s *Server) Routes() http.Handler {
@@ -36,6 +37,9 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/api/v1/confirm", s.guard(http.MethodPost, s.handleConfirm))
 	mux.Handle("/api/v1/rules/delete", s.guard(http.MethodPost, s.handleRuleDelete))
 	mux.Handle("/api/v1/rules/edit", s.guard(http.MethodPost, s.handleRuleEdit))
+	mux.Handle("/api/v1/access", s.guard(http.MethodGet, s.handleAccess))
+	mux.Handle("/api/v1/access/preview", s.guard(http.MethodPost, s.handleAccessPreview))
+	mux.Handle("/api/v1/access/apply", s.guard(http.MethodPost, s.handleAccessApply))
 	mux.Handle("/", s.Static)
 
 	root := http.NewServeMux()
