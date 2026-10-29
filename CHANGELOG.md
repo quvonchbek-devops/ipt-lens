@@ -13,6 +13,16 @@ and the project uses [Semantic Versioning](https://semver.org/).
   etcd, Prometheus, Telnet/FTP, SMB/NFS, remote desktop) are called out as
   risky, with one button that makes them VPN only (or closes them when no VPN
   is chosen). The change goes through the usual review and confirm steps.
+  It also warns, before anything else, when a VPN endpoint (WireGuard,
+  Tailscale, OpenVPN) would stop being reachable and take the VPN down.
+
+### Changed
+
+- The simple view is shorter: the quick-task cards are gone ("Lock the
+  server" moved into the status card, "Add a port" sits under the port list,
+  and closing a container port is the row's own *Nobody* button), the VPN
+  card folds to one line once a VPN is chosen, port rows drop the repeated
+  sentence, and "Everything else" is now "Any other port".
 
 ### Changed
 

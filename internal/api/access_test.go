@@ -65,7 +65,7 @@ func TestAccessPreviewSentences(t *testing.T) {
 	}
 	all := strings.Join(p.Changes, "\n")
 	for _, want := range []string{
-		"Everything else: Everyone → VPN only",
+		"Any other port: Everyone → VPN only",
 		"Port 3306 (MySQL): Everyone → Nobody",
 		"VPN: wg0",
 	} {

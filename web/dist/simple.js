@@ -8,11 +8,6 @@
   const MODE_KEY = "iptlens_mode";
   const LEVELS = ["public", "vpn", "closed"];
   const LABEL = { public: "Everyone", vpn: "VPN only", closed: "Nobody" };
-  const SENTENCE = {
-    public: "Anyone on the internet can connect.",
-    vpn: "Only devices on your VPN can connect.",
-    closed: "Nobody can connect from outside.",
-  };
   // Pre-checked in "Lock the server": SSH, web, and VPN endpoints (which must
   // stay reachable from the internet, or the VPN itself goes down).
   // Shape as well as color tells the levels apart: open globe, shield, lock.
@@ -27,11 +22,13 @@
     warn: LEVEL_ICON.public,
     ok: icon('<path d="M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6Z"/><path d="m9 12 2 2 4-4"/>'),
   };
+  const VPN_ENDPOINTS = new Set(["WireGuard", "Tailscale", "OpenVPN"]);
   const PUBLIC_BY_DEFAULT = new Set(["22/tcp", "80/tcp", "443/tcp", "51820/udp", "41641/udp", "1194/udp"]);
 
   let view = null; // last GET /api/v1/access
   let base = null; // the policy currently in force (normalized)
   let draft = null; // the policy being edited
+  let vpnOpen = false; // the VPN picker stays folded once a VPN is chosen
 
   const key = (port, proto) => `${port}/${proto}`;
   const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -71,7 +68,7 @@
     let n = 0;
     if (vpnText(base) !== vpnText(draft)) n++;
     if (base.default !== draft.default) n++;
-    // A row that just follows "Everything else" is covered by the default's change.
+    // A row that just follows "Any other port" is covered by the default's change.
     allRows().forEach((r) => {
       const a = levelIn(base, r.port, r.proto);
       const b = levelIn(draft, r.port, r.proto);
@@ -103,6 +100,7 @@
 
   /* ---------- data ---------- */
   async function load() {
+    vpnOpen = false;
     try {
       view = await L.api("/api/v1/access");
       base = normalize(view.policy, view.configured);
@@ -143,7 +141,6 @@
     const title = titleOf(r);
     const tags = [];
     if (exposed && r.risk) tags.push(`<span class="badge badge-risk">risky: ${L.esc(r.risk)}</span>`);
-    if (r.host) tags.push(`<span class="badge badge-iface">this server</span>`);
     r.containers.forEach((c) => tags.push(`<span class="badge badge-docker">container: ${L.esc(c)}</span>`));
     if (r.locked) tags.push(`<span class="badge badge-vpn">IPT-Lens</span>`);
     return `<span class="s-title"><b>${L.esc(title)}</b> ${tags.join(" ")}</span>`;
@@ -182,9 +179,13 @@
     if (!list.children.length) {
       list.append(L.el("p", "hint", "No VPN interface found (wg*, tailscale*, tun*, zt*). Add your VPN subnet below."));
     }
-    $("s-vpn-status").textContent = hasVPN(draft)
-      ? `Devices connecting through ${vpnText(draft)} count as your VPN.`
-      : "Choose the VPN your devices connect through. “VPN only” needs it.";
+    const folded = hasVPN(draft) && !vpnOpen;
+    $("s-vpn-edit").hidden = folded;
+    $("s-vpn-change").hidden = !folded;
+    $("s-vpn-card").classList.toggle("folded", folded);
+    $("s-vpn-status").innerHTML = hasVPN(draft)
+      ? `<span class="mono">${L.esc(vpnText(draft))}</span>`
+      : "Pick the one your devices connect through. “VPN only” needs it.";
   }
 
   function renderRows() {
@@ -200,9 +201,6 @@
       if (r.proto !== "tcp") port.append(L.el("span", "s-proto", "/" + r.proto));
       const what = L.el("div", "s-what");
       what.innerHTML = describe(r, cur.level === "public");
-      const sentence = L.el("div", "s-sentence", SENTENCE[cur.level]);
-      if (!cur.explicit) sentence.append(L.el("span", "tert", " Follows “Everything else”."));
-      what.append(sentence);
       row.append(port, what, levelButtons(r.port, r.proto, cur.level, {
         locked: r.locked,
         onPick: (lvl) => { setLevel(r.port, r.proto, lvl); render(); },
@@ -216,8 +214,8 @@
     const label = L.el("div", "s-port", "*");
     label.setAttribute("aria-hidden", "true");
     const what = L.el("div", "s-what");
-    what.innerHTML = "<b>Everything else</b>";
-    what.append(L.el("div", "s-sentence", `${SENTENCE[draft.default]} Applies to every port not listed above, including ones that start listening later.`));
+    what.innerHTML = "<b>Any other port</b>";
+    what.append(L.el("div", "s-sentence", "Including ports that open later."));
     def.append(label, what, levelButtons(0, "", draft.default, {
       label: "Who can reach every other port",
       onPick: (lvl) => { draft.default = lvl; render(); },
@@ -230,6 +228,11 @@
     const box = $("s-verdict");
     const open = allRows().filter((r) => levelIn(draft, r.port, r.proto).level === "public");
     const risky = open.filter((r) => r.risk);
+    // A VPN endpoint must stay reachable from the internet, or the VPN goes down
+    // and "VPN only" locks everyone out.
+    const endpoints = hasVPN(draft)
+      ? allRows().filter((r) => VPN_ENDPOINTS.has(r.name) && levelIn(draft, r.port, r.proto).level !== "public")
+      : [];
     const portList = (rows, withRisk) => {
       const ul = L.el("ul", "s-v-ports");
       rows.forEach((r) => {
@@ -241,7 +244,17 @@
       return ul;
     };
     let tone, title, body = [], action = null;
-    if (risky.length) {
+    if (endpoints.length) {
+      tone = "bad";
+      title = "Your VPN would stop working";
+      body.push(portList(endpoints, false));
+      body.push(L.el("p", "s-v-text", "Devices connect to these from the internet before they are on the VPN, so they must stay open to everyone."));
+      action = {
+        label: endpoints.length === 1 ? `Keep ${endpoints[0].name} open` : "Keep them open",
+        cls: "btn-danger",
+        run: () => { endpoints.forEach((r) => setLevel(r.port, r.proto, "public")); render(); },
+      };
+    } else if (risky.length) {
       tone = "bad";
       const n = risky.length;
       title = n === 1 ? "1 risky port is open to the whole internet" : `${n} risky ports are open to the whole internet`;
@@ -261,11 +274,11 @@
       };
     } else if (draft.default === "public") {
       tone = "warn";
-      title = "Every new service will be open to the whole internet";
+      title = "New services will be open to the whole internet";
       if (open.length) {
         body.push(L.el("p", "s-v-text", "Open to everyone right now:"), portList(open, false));
       }
-      body.push(L.el("p", "s-v-text", "“Everything else” is set to Everyone, so any port that starts listening later is public too."));
+      body.push(L.el("p", "s-v-text", "“Any other port” is set to Everyone."));
       action = { label: "Lock the server behind the VPN", cls: "btn-primary", run: taskLock };
     } else {
       tone = "ok";
@@ -400,7 +413,7 @@
       picker = vpnPicker();
       body.push(L.el("div", "field-label", "2. Which VPN do your devices use?"), picker.node);
     }
-    body.push(L.el("p", "hint", "Every other port, including Docker ports and ports that open later, becomes VPN only."));
+    body.push(L.el("p", "hint", "Every other port, Docker ones and ones that open later included, becomes VPN only."));
     L.openModal({
       title: "Lock the server behind the VPN",
       body,
@@ -441,7 +454,7 @@
     const field = (label, input) => { const l = L.el("label", "", label); l.append(input); return l; };
     grid.append(field("Port", port), field("Protocol", proto), field("Who can connect", who));
     L.openModal({
-      title: "Open a port",
+      title: "Add a port",
       body: [grid],
       actions: [
         { label: "Cancel", cls: "btn-ghost", onClick: L.dismissModal },
@@ -458,43 +471,10 @@
     });
   }
 
-  function taskContainer() {
-    const rows = allRows().filter((r) => r.containers.length);
-    if (!rows.length) {
-      L.toast("No published container ports found.", "info");
-      return;
-    }
-    const checks = rows.map((r) => ({ r, ...check(`<span class="mono">${r.port}</span> ${describe(r)}`, false) }));
-    const who = L.el("select");
-    who.append(new Option("Nobody", "closed"));
-    if (hasVPN(draft)) who.append(new Option("VPN only", "vpn"));
-    who.setAttribute("aria-label", "Who can still connect");
-    const pick = L.el("label", "", "Who can still connect");
-    pick.append(who);
-    L.openModal({
-      title: "Close a container port",
-      sub: "Docker publishes ports past the normal firewall rules. These rules reach them anyway.",
-      body: [L.el("div", "field-label", "Ports to close"), ...checks.map((c) => c.node), pick],
-      actions: [
-        { label: "Cancel", cls: "btn-ghost", onClick: L.dismissModal },
-        { label: "Continue to review", cls: "btn-primary", onClick: () => {
-          const chosen = checks.filter((c) => c.input.checked);
-          if (!chosen.length) { L.toast("Pick at least one port.", "error"); return; }
-          chosen.forEach(({ r }) => setLevel(r.port, r.proto, who.value));
-          L.closeModal();
-          render();
-          review();
-        } },
-      ],
-    });
-  }
-
   /* ---------- events ---------- */
   document.querySelectorAll(".mode-switch .seg-btn").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
-  document.querySelectorAll(".s-task").forEach((b) => b.addEventListener("click", () => {
-    if (!view) return;
-    ({ lock: taskLock, open: taskOpen, container: taskContainer })[b.dataset.task]();
-  }));
+  $("s-add-port").addEventListener("click", () => { if (view) taskOpen(); });
+  $("s-vpn-change").addEventListener("click", () => { vpnOpen = true; render(); $("s-vpn-list").querySelector("button")?.focus(); });
   $("s-vpn-add").addEventListener("click", () => {
     const v = $("s-vpn-subnet").value.trim();
     if (!/^\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?$/.test(v)) { L.toast("Enter an IPv4 subnet such as 100.64.0.0/10.", "error"); return; }

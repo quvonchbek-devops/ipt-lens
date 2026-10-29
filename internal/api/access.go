@@ -267,7 +267,7 @@ func previewOf(cur, next iptables.AccessPolicy, rows []accessRow, ipv6 bool) acc
 	curDef, _ := levelOf(cur, 0, "")
 	nextDef, _ := levelOf(next, 0, "")
 	if curDef != nextDef {
-		pv.Changes = append(pv.Changes, fmt.Sprintf("Everything else: %s → %s", levelLabel[curDef], levelLabel[nextDef]))
+		pv.Changes = append(pv.Changes, fmt.Sprintf("Any other port: %s → %s", levelLabel[curDef], levelLabel[nextDef]))
 	}
 
 	type key struct {

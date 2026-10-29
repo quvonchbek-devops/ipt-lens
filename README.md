@@ -20,12 +20,13 @@ confirm it**. If you lose access and cannot confirm, the change rolls itself bac
 
 ## Features
 
-- **Simple view: who can reach which port.** One list of the ports this server
-  listens on and the ports Docker publishes. For each, pick **Everyone**,
-  **VPN only** or **Nobody**, plus one setting for every other port. Quick tasks
-  cover the common jobs: *lock the server behind the VPN*, *open a port*,
-  *close a container port*. Every change is shown in plain sentences before it
-  is applied. You never write an iptables rule. Colors show exposure, not
+- **Simple view: who can reach which port.** It opens with one sentence on
+  how exposed the server is: risky ports open to the internet (databases, the
+  Docker API, remote desktop, ...) are named, with one button to fix them, and
+  it warns before a change would take your VPN down. Below is one list of the
+  ports this server listens on and the ports Docker publishes. For each, pick
+  **Everyone**, **VPN only** or **Nobody**, plus one setting for any other
+  port. Every change is shown in plain sentences before it is applied. You never write an iptables rule. Colors show exposure, not
   "good" or "bad": amber is open to the internet, blue is VPN only, grey with a
   lock is closed; each level also has its own icon.
 - **Readable ruleset (Advanced view).** ([screenshot](docs/images/advanced.png)) All four tables, chains in kernel order, packet and byte
