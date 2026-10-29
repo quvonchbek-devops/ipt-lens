@@ -6,6 +6,21 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Safer rollback. Every undo command is checked against the live ruleset
+  first, so a change interrupted by a crash rolls back cleanly instead of
+  failing or adding a rule twice. A failed check (for example a lock timeout)
+  keeps the record for an operator; it never skips the undo.
+- Rolling back a deleted or edited rule puts the old rule back next to the
+  rule that was above (or below) it, not at a bare position, so rules another
+  tool inserts during the confirm window cannot shift it. An edit is undone by
+  removing the new rule and re-inserting the old one, never by `-R` at a
+  position. A rule that is unique in its chain is deleted by its spec.
+- Editing a rule into one that already exists in the chain is refused.
+- The recovery check also refuses `-M` and abbreviations of `--modprobe`, and
+  position-only undo records (`-R`, `-D <n>`) written by older versions.
+
 ## [0.1.0] - 2026-10-29
 
 First public release.

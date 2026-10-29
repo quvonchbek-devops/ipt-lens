@@ -205,8 +205,8 @@ All endpoints are under `/api/v1`, take and return JSON, and need
   `raw` tables are shown but not simulated.
 - New rules accept a limited set of options and the targets `ACCEPT`, `DROP`,
   `REJECT` and `RETURN`.
-- Undoing a delete re-inserts the rule at its old position. If another tool
-  changed the chain in the meantime, the position may be off.
+- Undoing a delete or an edit puts the rule back below its old neighbor. If
+  another tool removed both neighbors in the meantime, the old position is used.
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for what is planned.
 

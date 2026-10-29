@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -20,7 +21,16 @@ type fakeIPT struct {
 	save   string
 	save6  string // empty: ip6tables is not available
 	fail6  bool   // ip6tables is installed but cannot be read
+	// query answers read-only calls (-C, -S); they are not recorded in calls.
+	// Without it, -C finds every rule and -S lists none.
+	query func(cmd string) (string, error)
 }
+
+// exitErr is an error carrying an iptables exit status, like *exec.ExitError.
+type exitErr int
+
+func (e exitErr) Error() string { return "exit status " + strconv.Itoa(int(e)) }
+func (e exitErr) ExitCode() int { return int(e) }
 
 func installFake(t *testing.T) *fakeIPT {
 	t.Helper()
@@ -29,6 +39,13 @@ func installFake(t *testing.T) *fakeIPT {
 	oldIP6T, oldSave6, oldRules6 := runIP6T, runSave6, runSaveRules6
 	record := func(prefix string, args []string) ([]byte, error) {
 		cmd := prefix + strings.Join(args[2:], " ")
+		if len(args) > 4 && (args[4] == "-C" || args[4] == "-S") {
+			if f.query == nil {
+				return nil, nil
+			}
+			out, err := f.query(cmd)
+			return []byte(out), err
+		}
 		if f.onCall != nil {
 			if err := f.onCall(cmd); err != nil {
 				return []byte(err.Error()), err

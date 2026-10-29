@@ -237,6 +237,12 @@ func TestApplyAccessSwapsAndCleansUpOnConfirm(t *testing.T) {
 func TestApplyAccessRollbackRestoresOldChain(t *testing.T) {
 	f := installFake(t)
 	f.save = saveWith(samplePolicy(), "A", false)
+	f.query = func(cmd string) (string, error) {
+		if strings.HasSuffix(cmd, "-j IPTLENS-IN-A") { // the apply removed the old jump
+			return "", exitErr(1)
+		}
+		return "", nil
+	}
 	w := newTestWatchdog(t, 20*time.Millisecond)
 	if err := w.ApplyAccess(samplePolicy()); err != nil {
 		t.Fatal(err)

@@ -55,7 +55,22 @@ At start, the state directory must not be a symlink, writable by group or
 others, or owned by another user. A leftover `pending.json` is rolled back only
 if it comes from the current boot (after a reboot the kernel ruleset was
 rebuilt, so replaying would hit the wrong rules) and every undo command has the
-shape `-t <table> -D|-I|-R <chain> ...` without `--modprobe`.
+shape `[-6] -t <table> -D <chain> <spec>`, `-I <chain> <pos> <spec>` or
+`-F|-X` on an IPT-Lens chain, with no `--modprobe` (or abbreviation) and no
+`-M`. Position-only undos (`-R`, `-D <n>`) that older versions wrote are
+refused and left for an operator.
+
+Every undo command is checked against the live ruleset before it runs, so a
+record that names steps a crash prevented is still safe to replay: `-D <spec>`
+runs only if `-C` finds the rule, `-F`/`-X` only if the chain exists, and an
+`-I` only if the rule is missing. Only exit status 1 (no such rule or chain)
+skips a command; any other failure of a check, such as a lock timeout, is an
+error and the record stays. Undoing a delete or an edit re-inserts the old
+rule using an *anchor* stored beside the command: the rules that were above
+and below it and how many copies the chain held. The rule goes back below its
+old upper neighbor (or above its lower one), the copy nearest the old position
+when a neighbor repeats, so rules other tools add meanwhile cannot shift it.
+An edit's anchor also names the new rule, which is deleted by spec first.
 
 ## Simulator
 

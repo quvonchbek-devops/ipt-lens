@@ -35,7 +35,8 @@ type Watchdog struct {
 
 type change struct {
 	Desc    string     `json:"desc"`
-	Undo    [][]string `json:"undo"` // in execution order (reverse of the applied steps)
+	Undo    [][]string `json:"undo"`              // in execution order (reverse of the applied steps)
+	Anchors []*anchor  `json:"anchors,omitempty"` // per undo command; nil for most
 	BootID  string     `json:"boot_id,omitempty"`
 	Expires time.Time  `json:"expires"`
 	cleanup [][]string // best-effort commands run after confirmation
@@ -49,7 +50,10 @@ type plan struct {
 	cleanup [][]string // run after confirmation, e.g. removing a replaced chain
 }
 
-type step struct{ do, undo []string }
+type step struct {
+	do, undo []string
+	at       *anchor // where undo re-inserts a rule; nil when undo needs no position
+}
 
 // Option configures a Watchdog.
 type Option func(*Watchdog)
@@ -131,14 +135,18 @@ func (w *Watchdog) recover() {
 		_ = os.Remove(w.pendingPath())
 		return
 	}
-	for _, cmd := range c.Undo {
-		if !safeUndo(cmd) {
+	if len(c.Anchors) != 0 && len(c.Anchors) != len(c.Undo) {
+		log.Printf("malformed undo record in %s, leaving it for an operator", w.pendingPath())
+		return
+	}
+	for i, cmd := range c.Undo {
+		if !safeUndoAt(cmd, c.anchor(i)) {
 			log.Printf("refusing unexpected undo command in %s, leaving it for an operator: %q", w.pendingPath(), cmd)
 			return
 		}
 	}
 	log.Printf("found unconfirmed change (%s), rolling it back", c.Desc)
-	if err := runUndo(c.Undo); err != nil {
+	if err := c.rollback(); err != nil {
 		log.Printf("rollback error, leaving %s for an operator: %v", w.pendingPath(), err)
 		return
 	}
@@ -146,7 +154,10 @@ func (w *Watchdog) recover() {
 }
 
 // safeUndo accepts only the shapes this package writes:
-// [-6] -t <table> -D|-I|-R <chain> ..., with no --modprobe.
+// [-6] -t <table> -D <chain> <spec>, -I <chain> <pos> <spec>, or -F|-X on an
+// IPT-Lens chain, with no way to name a module loader. Undos by bare position
+// (-R, or -D with a number), which older versions wrote, are refused: other
+// tools may have shifted the chain, so they could hit someone else's rule.
 func safeUndo(cmd []string) bool {
 	if len(cmd) > 0 && cmd[0] == v6Flag {
 		cmd = cmd[1:]
@@ -155,7 +166,14 @@ func safeUndo(cmd []string) bool {
 		return false
 	}
 	switch cmd[2] {
-	case "-D", "-I", "-R":
+	case "-D":
+		if len(cmd) < 5 || (len(cmd) == 5 && isNumber(cmd[4])) {
+			return false
+		}
+	case "-I":
+		if len(cmd) < 6 {
+			return false
+		}
 	case "-F", "-X": // only IPT-Lens' own chains may be flushed or deleted
 		if len(cmd) != 4 || !strings.HasPrefix(cmd[3], accessPrefix) {
 			return false
@@ -163,21 +181,45 @@ func safeUndo(cmd []string) bool {
 	default:
 		return false
 	}
-	for _, a := range cmd {
-		if strings.HasPrefix(a, "--modprobe") {
+	return safeArgs(cmd)
+}
+
+// safeArgs rejects every way to make iptables run a module loader: --modprobe
+// and its abbreviations, and -M alone or bundled with other short options.
+func safeArgs(args []string) bool {
+	for _, a := range args {
+		name, _, _ := strings.Cut(a, "=")
+		if len(name) >= 3 && strings.HasPrefix("--modprobe", name) {
+			return false
+		}
+		if strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && strings.Contains(a, "M") {
 			return false
 		}
 	}
 	return true
 }
 
+func isNumber(s string) bool {
+	_, err := strconv.Atoi(s)
+	return err == nil
+}
+
 func (w *Watchdog) pendingPath() string { return filepath.Join(w.dir, "pending.json") }
 
-func runUndo(cmds [][]string) error {
+func (c *change) anchor(i int) *anchor {
+	if i < len(c.Anchors) {
+		return c.Anchors[i]
+	}
+	return nil
+}
+
+// rollback runs every undo command, checking each against the live ruleset.
+// It keeps going after an error so that as much as possible is undone.
+func (c *change) rollback() error {
 	var errs []string
-	for _, cmd := range cmds {
-		if out, err := ipt(cmd...); err != nil {
-			errs = append(errs, fmt.Sprintf("%v: %s", err, strings.TrimSpace(string(out))))
+	for i, cmd := range c.Undo {
+		if err := runUndoCmd(cmd, c.anchor(i)); err != nil {
+			errs = append(errs, err.Error())
 		}
 	}
 	if len(errs) > 0 {
@@ -186,15 +228,20 @@ func runUndo(cmds [][]string) error {
 	return nil
 }
 
-// reverseUndo returns the undo commands of steps in reverse order.
-func reverseUndo(steps []step) [][]string {
-	undo := make([][]string, 0, len(steps))
+// setUndo records the undo commands of steps in reverse order.
+func (c *change) setUndo(steps []step) {
+	c.Undo, c.Anchors = nil, nil
+	anchored := false
 	for i := len(steps) - 1; i >= 0; i-- {
 		if len(steps[i].undo) > 0 { // some steps are undone together by another step's undo
-			undo = append(undo, steps[i].undo)
+			c.Undo = append(c.Undo, steps[i].undo)
+			c.Anchors = append(c.Anchors, steps[i].at)
+			anchored = anchored || steps[i].at != nil
 		}
 	}
-	return undo
+	if !anchored {
+		c.Anchors = nil
+	}
 }
 
 // begin builds the plan under the lock, takes a backup, records the pending
@@ -222,8 +269,8 @@ func (w *Watchdog) begin(build func() (plan, error)) error {
 		return err
 	}
 
-	c := &change{Desc: p.desc, Undo: reverseUndo(p.steps), Expires: time.Now().Add(w.timeout), BootID: bootID(),
-		cleanup: p.cleanup}
+	c := &change{Desc: p.desc, Expires: time.Now().Add(w.timeout), BootID: bootID(), cleanup: p.cleanup}
+	c.setUndo(p.steps)
 	if err := w.writePending(c); err != nil {
 		return fmt.Errorf("cannot record pending change, nothing was applied: %w", err)
 	}
@@ -231,11 +278,11 @@ func (w *Watchdog) begin(build func() (plan, error)) error {
 	for i, st := range p.steps {
 		if out, err := ipt(st.do...); err != nil {
 			applyErr := fmt.Errorf("iptables error: %s", strings.TrimSpace(string(out)))
-			c.Undo = reverseUndo(p.steps[:i]) // only the steps that ran
+			c.setUndo(p.steps[:i]) // only the steps that ran
 			if err := w.writePending(c); err != nil {
 				log.Printf("cannot update pending record: %v", err)
 			}
-			if rbErr := runUndo(c.Undo); rbErr != nil {
+			if rbErr := c.rollback(); rbErr != nil {
 				// Keep pending.json: it is the only record of what is still applied.
 				log.Printf("rollback after failed apply: %v", rbErr)
 				return fmt.Errorf("%w (rollback also failed: %v)", applyErr, rbErr)
@@ -329,7 +376,7 @@ func (w *Watchdog) expire(c *change) {
 	}
 	log.Printf("not confirmed in time, rolling back: %s", c.Desc)
 	w.pending = nil
-	if err := runUndo(c.Undo); err != nil {
+	if err := c.rollback(); err != nil {
 		// Keep pending.json: it records what may still be applied, and blocks new changes.
 		log.Printf("rollback error, leaving %s for an operator: %v", w.pendingPath(), err)
 		return

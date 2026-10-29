@@ -76,65 +76,101 @@ func currentState6() (*SystemState, error) {
 
 // findRule finds rule #num in the live ruleset and checks that it is still
 // the rule the client saw (expect), so a stale view cannot delete the wrong rule.
-func findRule(table, chain string, num int, expect string) (*Rule, error) {
+func findRule(table, chain string, num int, expect string) (*Chain, *Rule, error) {
 	st, err := currentState()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	tbl, ok := st.Tables[table]
 	if !ok {
-		return nil, invalidf("table not found: %s", table)
+		return nil, nil, invalidf("table not found: %s", table)
 	}
 	ch, ok := tbl.Chains[chain]
 	if !ok {
-		return nil, invalidf("chain not found: %s", chain)
+		return nil, nil, invalidf("chain not found: %s", chain)
 	}
 	if num < 1 || num > len(ch.Rules) {
-		return nil, invalidf("rule #%d not found", num)
+		return nil, nil, invalidf("rule #%d not found", num)
 	}
 	r := ch.Rules[num-1]
 	if stripCounters(r.RawRule) != stripCounters(expect) {
-		return nil, ErrStale
+		return nil, nil, ErrStale
 	}
 	if r.Protected {
-		return nil, ErrProtected
+		return nil, nil, ErrProtected
 	}
-	return r, nil
+	return ch, r, nil
 }
 
-// DeleteRule deletes a rule. If not confirmed, it is re-inserted at the same position.
+// DeleteRule deletes a rule. If not confirmed, it is re-inserted below the
+// rule that was above it.
 func (w *Watchdog) DeleteRule(table, chain string, num int, expect string) error {
 	if err := checkNames(table, chain); err != nil {
 		return err
 	}
 	return w.begin(func() (plan, error) {
-		r, err := findRule(table, chain, num, expect)
+		ch, r, err := findRule(table, chain, num, expect)
 		if err != nil {
 			return plan{}, err
 		}
 		n := strconv.Itoa(num)
+		at := anchorOf(ch, num)
+		del := []string{"-t", table, "-D", chain, n}
+		if at.Count == 1 { // by spec, so a rule inserted above it meanwhile cannot shift it
+			del = append([]string{"-t", table, "-D", chain}, ruleArgs(r.RawRule)...)
+		}
 		return plan{
 			desc:  fmt.Sprintf("delete %s/%s #%d", table, chain, num),
-			steps: []step{{do: []string{"-t", table, "-D", chain, n}, undo: append([]string{"-t", table, "-I", chain, n}, ruleArgs(r.RawRule)...)}},
+			steps: []step{{do: del, undo: append([]string{"-t", table, "-I", chain, n}, ruleArgs(r.RawRule)...), at: at}},
 		}, nil
 	})
 }
 
-// EditRule replaces a rule in place (-R). If not confirmed, the old rule is restored.
+// EditRule replaces a rule in place (-R). If not confirmed, the new rule is
+// removed and the old one re-inserted where the new one was.
 func (w *Watchdog) EditRule(table, chain string, num int, expect, newRule string) error {
 	spec, err := ValidateRule(table, chain, newRule)
 	if err != nil {
 		return err
 	}
 	return w.begin(func() (plan, error) {
-		r, err := findRule(table, chain, num, expect)
+		ch, r, err := findRule(table, chain, num, expect)
 		if err != nil {
 			return plan{}, err
 		}
+		// The undo removes the new rule by spec, so it must be the only copy.
+		if dup, err := query(nil, table, "-C", chain, spec); err != nil {
+			return plan{}, err
+		} else if dup {
+			return plan{}, ErrDuplicate
+		}
 		n := strconv.Itoa(num)
+		at := anchorOf(ch, num)
+		at.Remove = spec
 		return plan{
 			desc:  fmt.Sprintf("edit %s/%s #%d", table, chain, num),
-			steps: []step{{do: append([]string{"-t", table, "-R", chain, n}, spec...), undo: append([]string{"-t", table, "-R", chain, n}, ruleArgs(r.RawRule)...)}},
+			steps: []step{{do: append([]string{"-t", table, "-R", chain, n}, spec...), undo: append([]string{"-t", table, "-I", chain, n}, ruleArgs(r.RawRule)...), at: at}},
 		}, nil
 	})
+}
+
+// anchorOf records the neighbors of rule #num and how many copies of it the chain holds.
+func anchorOf(ch *Chain, num int) *anchor {
+	args := func(r *Rule) string { return strings.Join(ruleArgs(r.RawRule), " ") }
+	self := args(ch.Rules[num-1])
+	a := &anchor{}
+	for _, r := range ch.Rules {
+		if args(r) == self {
+			a.Count++
+		}
+	}
+	if num > 1 {
+		prev := args(ch.Rules[num-2])
+		a.Prev = &prev
+	}
+	if num < len(ch.Rules) {
+		next := args(ch.Rules[num])
+		a.Next = &next
+	}
+	return a
 }
